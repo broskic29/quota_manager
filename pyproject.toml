@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quota_manager"
+version = "0.1.0"
+description = ""
+authors = [
+    { name = "Ambroise", email = "ambroisecuru@gmail.com" }
+]
+dependencies = [
+]
+
+[project.scripts]
+dev_test = "quota_manager.dev_test:main"
