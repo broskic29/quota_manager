@@ -11,6 +11,3 @@ authors = [
 ]
 dependencies = [
 ]
-
-[project.scripts]
-dev_test = "quota_manager.dev_test:main"
