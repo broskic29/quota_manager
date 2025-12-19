@@ -9,6 +9,7 @@ def connect_to_db(db_path="/var/lib/radius/freeradius.db"):
 
 def print_all_tables(db_path="/var/lib/radius/freeradius.db"):
     con = connect_to_db(db_path)
+    cur = con.cursor()
     res = cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = res.fetchall()
     print(tables)
