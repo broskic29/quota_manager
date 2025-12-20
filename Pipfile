@@ -5,6 +5,10 @@ name = "pypi"
 
 [packages]
 pytest = "*"
+flask = "*"
+sqlite3 = "*"
+pyrad = "*"
+asyncio = "*"
 
 [dev-packages]
 
