@@ -9,5 +9,6 @@ description = ""
 authors = [
     { name = "Ambroise", email = "ambroisecuru@gmail.com" }
 ]
-dependencies = [
-]
+
+[project.scripts]
+quota_manager = "quota_manager.cli:main"

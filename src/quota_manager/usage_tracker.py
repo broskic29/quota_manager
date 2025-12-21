@@ -1,8 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
 
-import quota_manager.sql_management as sqlm
-
 
 async def daily_task():
     # Replace this with your actual daily logic
@@ -46,12 +44,6 @@ async def scheduler():
             await monthly_task()
 
 
-async def main():
+async def daemon():
     # Run the scheduler in the background
     await scheduler()
-
-
-if __name__ == "__main__":
-    sqlm.init_freeradius_db()
-    sqlm.init_usage_db()
-    asyncio.run(main())

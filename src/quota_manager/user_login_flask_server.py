@@ -3,6 +3,7 @@ from pyrad.client import Client
 from pyrad.dictionary import Dictionary
 from pyrad.packet import AccessRequest, AccessAccept
 from python_arptable import get_arp_table
+
 import socket
 import threading
 import time
@@ -10,7 +11,7 @@ import time
 import quota_manager.sql_management as sqlm
 import quota_manager.nftables_management as nftm
 
-app = Flask(__name__)
+user_login_app = Flask(__name__)
 
 LOCALHOST = "127.0.0.1"
 
@@ -87,7 +88,7 @@ threading.Thread(target=cleanup_sessions, daemon=True).start()
 
 
 # --- Routes ---
-@app.route("/", methods=["GET", "POST"])
+@user_login_app.route("/", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
@@ -121,7 +122,3 @@ def login():
         else:
             error = "Invalid username or password"
     return render_template_string(login_form, error=error)
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -7,7 +7,7 @@ AUTH_SET_NAME = "authorized_users"
 THROTTLE_SET_NAME = "throttled_users"
 
 
-def add_user_from_set(table_family, table_name, set_name, mac_address):
+def add_user_to_set(table_family, table_name, set_name, mac_address):
     subprocess.run(
         [
             "nft",
