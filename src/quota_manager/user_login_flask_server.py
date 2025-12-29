@@ -48,7 +48,7 @@ def mac_from_ip(ip):
 
 
 # --- FreeRADIUS authentication ---
-def authenticate_radius(username, ip_address, mac_address, password):
+def authenticate_radius(username, password, ip_address, mac_address):
     srv = Client(
         server=RADIUS_SERVER,
         secret=RADIUS_SECRET,
@@ -96,7 +96,7 @@ def login():
         password = request.form["password"]
         user_ip = request.remote_addr
         user_mac = mac_from_ip(user_ip)
-        if authenticate_radius(username, password):
+        if authenticate_radius(username, password, user_ip, user_mac):
 
             old_user_mac = sqlm.fetch_user_mac(username)
 

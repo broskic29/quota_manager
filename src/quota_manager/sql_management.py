@@ -4,6 +4,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import subprocess
 
+import flask
+
 import quota_manager.sqlite_helper_functions as sqlh
 import quota_manager.nftables_management as nftm
 
@@ -18,10 +20,12 @@ def init_freeradius_db():
     p = Path(DEFAULT_DB_PATH)
 
     if not p.exists():
+        print("Path doesn't exist!")
         with open(DEFAULT_DB_PATH, "a") as f:
             pass
 
     if not sqlh.check_if_table_exists("radcheck"):
+        print("Table doesn't exist!")
         with open(DEFAULT_SCHEMA_PATH, "r") as f:
             subprocess.run(["sqlite3", DEFAULT_DB_PATH], stdin=f, check=True)
 
@@ -61,24 +65,36 @@ def insert_user_radius(
         """
     INSERT INTO radcheck (username, attribute, op, value)
     VALUES (?, ?, ?, ?)
+    WHERE NOT EXISTS username = ?
     """,
-        (f"{username}", "Cleartext-Password", ":=", f"{password}"),
+        (
+            f"{username}",
+            "Cleartext-Password",
+            ":=",
+            f"{password}",
+            f"{username}",
+        ),
     )
-
     user_id = cur.lastrowid
-    try:
-        return (
-            flask.jsonify(
-                {
-                    "status": "success",
-                    "message": f"User {username} with user_id {user_id} created.",
-                }
-            ),
-            201,
-        )
-    finally:
-        con.commit()
-        con.close()
+
+    con.commit()
+    con.close()
+
+    # The below is not working outside of a flask context.
+    # This function should be usable outside of flask.
+    # try:
+    #     return (
+    #         flask.jsonify(
+    #             {
+    #                 "status": "success",
+    #                 "message": f"User {username} with user_id {user_id} created.",
+    #             }
+    #         ),
+    #         201,
+    #     )
+    # finally:
+    #     con.commit()
+    #     con.close()
 
 
 def modify_username_radius(
@@ -219,8 +235,8 @@ def login_user_usage(
     db_path="/var/lib/radius/usage.db",
 ):
     con = sqlite3.connect(db_path)  # Connects to database
-    cur = con.cursor()
 
+    cur = con.cursor()
     cur.execute(
         """
         SELECT *
@@ -231,6 +247,10 @@ def login_user_usage(
     )
     row = cur.fetchone()
 
+    # This should update the user if it already exists,
+    # otherwise, create new user.
+
+    # Need to make daily bytes and whatnot carry over...
     if row:
         columns = [
             column
@@ -238,7 +258,9 @@ def login_user_usage(
             if column != "username"
         ]
         set_clause = ", ".join(f"{col} = ?" for col in columns)
-        values = [mac_address, ip_address, 0, 0, 0]
+        values = list(row)
+        values[0] = mac_address
+        values[1] = ip_address
 
         cur.execute(
             f"""
@@ -317,7 +339,7 @@ def fetch_radius_usage_for_user(username, db_path="/var/lib/radius/usage.db"):
 
     cur.execute(
         """
-        SELECT username, SUM(acctinputoctets + acctoutputoctets) as total_bytes
+        SELECT username, SUM(COALESCE(acctinputoctets, 0) + COALESCE(acctoutputoctets, 0)) AS total_bytes
         FROM radacct
         WHERE username = ?
         GROUP BY username
@@ -332,21 +354,7 @@ def fetch_radius_usage_for_user(username, db_path="/var/lib/radius/usage.db"):
 
 
 def fetch_radius_usage_all_users(db_path="/var/lib/radius/freeradius.db"):
-    con = sqlite3.connect(db_path)  # Connects to database
-    cur = con.cursor()
 
-    cur.execute(
-        """
-        SELECT username, SUM(acctinputoctets + acctoutputoctets) as total_bytes
-        FROM radacct
-        GROUP BY username
-        """,
-    )
-    rows = cur.fetchall()
-    usage_dict = {username: total_bytes / 1024 / 1024 for username, total_bytes in rows}
-    con.commit()
-    con.close()
-    return usage_dict
 
 
 def usage_update(db_path="/var/lib/radius/usage.db"):
