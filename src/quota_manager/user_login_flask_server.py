@@ -98,13 +98,19 @@ def login():
         user_mac = mac_from_ip(user_ip)
         if authenticate_radius(username, password, user_ip, user_mac):
 
-            old_user_mac = sqlm.fetch_user_mac(username)
-
             json_message = sqlm.login_user_usage(username, user_mac, user_ip)
+
+            old_user_mac = sqlm.fetch_user_mac_address_usage(username)
 
             # if user has dynamic mac, remove old one from set
             if old_user_mac != user_mac:
-                nftm.delete_user_from_set(
+
+                # has to be part of the daemon process to regularly update amount of bytes used total by user.
+                # This just calls the function to ensure that nothing is lost when the MAC address is updated.
+                sqlm.update_user_bytes_usage(username, mac_reset=True)
+
+                nftm.operation_on_set_element(
+                    "delete",
                     nftm.TABLE_FAMILY,
                     nftm.CAPTIVE_TABLE_NAME,
                     nftm.AUTH_SET_NAME,
@@ -112,8 +118,12 @@ def login():
                 )
 
             # Add nftables rule to switch this mac to authorized set
-            nftm.delete_user_from_set(
-                nftm.TABLE_FAMILY, nftm.CAPTIVE_TABLE_NAME, nftm.AUTH_SET_NAME, user_mac
+            nftm.operation_on_set_element(
+                "add",
+                nftm.TABLE_FAMILY,
+                nftm.CAPTIVE_TABLE_NAME,
+                nftm.AUTH_SET_NAME,
+                user_mac,
             )
 
             # Record session expiration

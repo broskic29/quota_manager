@@ -1,49 +1,97 @@
 import asyncio
-from datetime import datetime, timedelta
+import datetime as dt
+
+import quota_manager.sql_management as sqlm
+import quota_manager.nftables_management as nftm
+
+ACCOUNT_BILLING_DAY = 7
+UPDATE_INTERVAL = 10
 
 
-async def daily_task():
-    # Replace this with your actual daily logic
-    print(f"[{datetime.now()}] Running daily task!")
+def _reset_throttling(db_path=sqlm.USAGE_TRACKING_DB_PATH):
+
+    nftm.flush_set(nftm.TABLE_FAMILY, nftm.THROTTLE_TABLE_NAME, nftm.THROTTLE_SET_NAME)
+
+    usernames = sqlm.fetch_all_usernames_usage(db_path)
+
+    for username in usernames:
+
+        mac_address = sqlm.fetch_user_mac_address_usage(username, db_path)
+
+        nftm.operation_on_set_element(
+            "add",
+            nftm.TABLE_FAMILY,
+            nftm.THROTTLE_TABLE_NAME,
+            nftm.HIGH_SPEED_SET_NAME,
+            mac_address,
+        )
 
 
-async def monthly_task():
-    # Replace this with your actual monthly logic
-    print(f"[{datetime.now()}] Running monthly task!")
+def _enforce_quotas_all_users(db_path=sqlm.USAGE_TRACKING_DB_PATH):
+
+    usernames = sqlm.fetch_all_usernames_usage(db_path)
+
+    for username in usernames:
+        if sqlm.check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
+            username, db_path
+        ):
+            mac_address = sqlm.fetch_user_mac_address_usage(username, db_path)
+            # Add error catching here
+            nftm.operation_on_set_element(
+                "delete",
+                nftm.TABLE_FAMILY,
+                nftm.THROTTLE_TABLE_NAME,
+                nftm.HIGH_SPEED_SET_NAME,
+                mac_address,
+            )
+            nftm.operation_on_set_element(
+                "add",
+                nftm.TABLE_FAMILY,
+                nftm.THROTTLE_TABLE_NAME,
+                nftm.THROTTLE_SET_NAME,
+                mac_address,
+            )
 
 
-async def scheduler():
+async def wipe_scheduler():
     while True:
-        now = datetime.now()
+        tz = dt.timezone(dt.timedelta(hours=2))
+        now = dt.datetime.now(tz)
+
+        zero_hour = dt.datetime(now.year, now.month, now.day, tzinfo=tz)
 
         # ---------------------
         # Schedule next daily task
         # ---------------------
-        next_daily = datetime.combine(now.date(), datetime.min.time()) + timedelta(
-            days=1
-        )
-        daily_delay = (next_daily - now).total_seconds()
 
-        # ---------------------
-        # Schedule next monthly task
-        # ---------------------
-        first_of_next_month = datetime(now.year, now.month, 1) + timedelta(days=32)
-        first_of_next_month = first_of_next_month.replace(day=1)
-        monthly_delay = (first_of_next_month - now).total_seconds()
+        next_daily = zero_hour + dt.timedelta(days=1)
 
-        # Wait for the shorter of the two timers
-        wait_time = min(daily_delay, monthly_delay)
-        await asyncio.sleep(wait_time)
+        daily_delay = next_daily - now
+
+        await asyncio.sleep(daily_delay.seconds)
 
         # After waking up, determine which tasks to run
-        now = datetime.now()
-        if now.date() == next_daily.date():
-            await daily_task()
+        now = dt.datetime.now(tz)
 
-        if now.day == 1:  # first day of the month
-            await monthly_task()
+        if now.day == ACCOUNT_BILLING_DAY:
+            sqlm.usage_monthly_wipe()
+
+        sqlm.usage_daily_wipe()
+
+        _reset_throttling()
+        # Add another function call: _reset_user_packet_dropping()
+
+
+async def usage_updater():
+    while True:
+        await asyncio.sleep(UPDATE_INTERVAL)
+
+        sqlm.update_all_users_bytes_usage()
+
+        _enforce_quotas_all_users()
 
 
 async def daemon():
     # Run the scheduler in the background
-    await scheduler()
+    await wipe_scheduler()
+    await usage_updater()

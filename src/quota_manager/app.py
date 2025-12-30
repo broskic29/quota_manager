@@ -1,6 +1,7 @@
 import asyncio
 import signal
 import logging
+from waitress import serve
 
 from .usage_tracker import daemon
 from .sql_management import init_freeradius_db, init_usage_db
@@ -35,7 +36,7 @@ class QuotaManagerApp:
 
     def _run_flask(self):
         # Flask is blocking; this is intentional
-        user_login_app.run(host="0.0.0.0", port=5000, debug=False)
+        serve(user_login_app, host="0.0.0.0", port=5000)
 
     async def stop(self):
         log.info("Shutting down quota manager")

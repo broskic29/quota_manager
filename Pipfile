@@ -10,6 +10,9 @@ pyrad = "*"
 asyncio = "*"
 pytest = "*"
 python_arptable = "*"
+pip-nftables = "*"
+jsonschema = "*"
+waitress = "*"
 quota_manager = {path = ".", editable = true}
 
 [dev-packages]
