@@ -1,5 +1,4 @@
 import sqlite3
-from datetime import datetime, timezone, timedelta
 
 from pathlib import Path
 import subprocess
@@ -7,32 +6,26 @@ import subprocess
 import flask
 
 import quota_manager.sqlite_helper_functions as sqlh
-import quota_manager.nftables_management as nftm
-
-
-RADIUS_DB_PATH = "/var/lib/radius/freeradius.db"
-USAGE_TRACKING_DB_PATH = "/var/lib/radius/usage_tracking.db"
-DEFAULT_SCHEMA_PATH = "/etc/freeradius3/mods-config/sql/main/sqlite/schema.sql"
 
 
 # --- Database setup ---
 def init_freeradius_db():
-    p = Path(RADIUS_DB_PATH)
+    p = Path(sqlh.RADIUS_DB_PATH)
 
     if not p.exists():
         print("Path doesn't exist!")
-        with open(RADIUS_DB_PATH, "a") as f:
+        with open(sqlh.RADIUS_DB_PATH, "a") as f:
             pass
 
     if not sqlh.check_if_table_exists("radcheck"):
         print("Table doesn't exist!")
-        with open(DEFAULT_SCHEMA_PATH, "r") as f:
-            subprocess.run(["sqlite3", RADIUS_DB_PATH], stdin=f, check=True)
+        with open(sqlh.DEFAULT_SCHEMA_PATH, "r") as f:
+            subprocess.run(["sqlite3", sqlh.RADIUS_DB_PATH], stdin=f, check=True)
 
 
 # --- Database setup ---
 def init_usage_db():
-    con = sqlite3.connect(USAGE_TRACKING_DB_PATH)
+    con = sqlite3.connect(sqlh.USAGE_TRACKING_DB_PATH)
     cur = con.cursor()
 
     cur.execute(
@@ -56,8 +49,8 @@ def init_usage_db():
     CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_name TEXT NOT NULL,
-        daily_high_speed_quota_bytes INTEGER NOT NULL DEFAULT 0,
-        daily_total_quota_bytes INTEGER NOT NULL DEFAULT 0,
+        high_speed_quota INTEGER NOT NULL DEFAULT 0,
+        throttled_quota INTEGER NOT NULL DEFAULT 0,
         UNIQUE(group_name)
     );
     """
@@ -88,7 +81,7 @@ def init_usage_db():
 def insert_user_radius(
     username,
     password,
-    db_path=RADIUS_DB_PATH,
+    db_path=sqlh.RADIUS_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
@@ -96,8 +89,6 @@ def insert_user_radius(
         """
     INSERT INTO radcheck (username, attribute, op, value)
     VALUES (?, ?, ?, ?)
-    ON CONFLICT(username, attribute)
-    DO UPDATE SET value = excluded.value
     """,
         (
             f"{username}",
@@ -130,7 +121,7 @@ def insert_user_radius(
 def modify_username_radius(
     old_username,
     new_username,
-    db_path=RADIUS_DB_PATH,
+    db_path=sqlh.RADIUS_DB_PATH,
 ):
     con = sqlite3.connect(db_path)
     cursor = con.cursor()
@@ -161,7 +152,7 @@ def modify_username_radius(
 def modify_user_password_radius(
     username,
     password,
-    db_path=RADIUS_DB_PATH,
+    db_path=sqlh.RADIUS_DB_PATH,
 ):
     con = sqlite3.connect(db_path)
     cursor = con.cursor()
@@ -191,7 +182,7 @@ def modify_user_password_radius(
 
 def delete_user_radius(
     username,
-    db_path=RADIUS_DB_PATH,
+    db_path=sqlh.RADIUS_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
@@ -212,7 +203,7 @@ def insert_user_usage(
     username,
     mac_address,
     ip_address,
-    db_path=USAGE_TRACKING_DB_PATH,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
@@ -223,41 +214,38 @@ def insert_user_usage(
     """,
         (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0),
     )
-
     user_id = cur.lastrowid
-
-    try:
-        return (
-            flask.jsonify(
-                {
-                    "status": "success",
-                    "message": f"User {username} with user_id {user_id} created.",
-                }
-            ),
-            201,
-        )
-    finally:
-        con.commit()
-        con.close()
+    # try:
+    #     return (
+    #         flask.jsonify(
+    #             {
+    #                 "status": "success",
+    #                 "message": f"User {username} with user_id {user_id} created.",
+    #             }
+    #         ),
+    #         201,
+    #     )
+    # finally:
+    con.commit()
+    con.close()
 
 
 def create_group_usage(
     group_name,
-    quota,
-    db_path=USAGE_TRACKING_DB_PATH,
+    high_speed_quota,
+    throttled_quota,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
     cur.execute(
         """
-    INSERT INTO groups (group_name, quota)
-    VALUES (?, ?)
+    INSERT INTO groups (group_name, high_speed_quota, throttled_quota)
+    VALUES (?, ?, ?)
     """,
-        (f"{group_name}", f"{quota}"),
+        (group_name, high_speed_quota, throttled_quota),
     )
-
     group_id = cur.lastrowid
-
     # try:
     #     return (
     #         flask.jsonify(
@@ -271,7 +259,6 @@ def create_group_usage(
     # finally:
     #     con.commit()
     #     con.close()
-
     con.commit()
     con.close()
 
@@ -279,15 +266,11 @@ def create_group_usage(
 def insert_user_into_group_usage(
     group_name,
     username,
-    db_path=USAGE_TRACKING_DB_PATH,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
-
     cur.execute("PRAGMA foreign_keys = ON;")
-
-    cur.execute("BEGIN;")
-
     cur.execute(
         """
     DELETE FROM group_users
@@ -297,18 +280,16 @@ def insert_user_into_group_usage(
     """,
         (username,),
     )
-
     cur.execute(
         """
     INSERT OR IGNORE INTO group_users (group_id, user_id)
     SELECT g.id, u.id
     FROM groups g
     JOIN users u ON u.username = ?
-    WHERE g.name = ?
+    WHERE g.group_name = ?
     """,
         (username, group_name),
     )
-
     con.commit()
     con.close()
 
@@ -317,7 +298,7 @@ def login_user_usage(
     username,
     mac_address,
     ip_address,
-    db_path=USAGE_TRACKING_DB_PATH,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
 
@@ -373,7 +354,7 @@ def login_user_usage(
 
 def delete_user_usage(
     username,
-    db_path=USAGE_TRACKING_DB_PATH,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
@@ -384,7 +365,7 @@ def delete_user_usage(
     print(f"User '{username}' deleted successfully.")
 
 
-def fetch_user_mac_address_usage(username, db_path=USAGE_TRACKING_DB_PATH):
+def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path)
     cur = con.cursor()
 
@@ -396,10 +377,14 @@ def fetch_user_mac_address_usage(username, db_path=USAGE_TRACKING_DB_PATH):
         """,
         (username,),
     )
+    res = cur.fetchone()
+    if res is None:
+        print(f"No mac_address can be found for user: {username}")
+        return res
     return cur.fetchone()[0]
 
 
-def fetch_all_usernames_usage(db_path=USAGE_TRACKING_DB_PATH):
+def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path)
     cur = con.cursor()
     cur.execute(
@@ -411,13 +396,12 @@ def fetch_all_usernames_usage(db_path=USAGE_TRACKING_DB_PATH):
     return [entry[0] for entry in cur.fetchall()]
 
 
-def update_user_bytes_usage(username, mac_reset=False, db_path=USAGE_TRACKING_DB_PATH):
+def update_user_bytes_usage(
+    user_bytes, username, mac_reset=False, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
 
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
-
-    user_mac = fetch_user_mac_address_usage(username)
-    user_bytes = nftm.get_bytes_from_user(nftm.TABLE_FAMILY, user_mac)
 
     session_bytes = user_bytes if not mac_reset else 0
 
@@ -425,7 +409,7 @@ def update_user_bytes_usage(username, mac_reset=False, db_path=USAGE_TRACKING_DB
         """
         UPDATE users
         SET daily_usage_bytes = daily_usage_bytes + (? - session_total_bytes),
-            monthly_total_bytes = monthly_total_bytes + (? - session_total_bytes),
+            monthly_usage_bytes = monthly_usage_bytes + (? - session_total_bytes),
             session_total_bytes = ?
         WHERE username = ?
         """,
@@ -441,15 +425,7 @@ def update_user_bytes_usage(username, mac_reset=False, db_path=USAGE_TRACKING_DB
     con.close()
 
 
-def update_all_users_bytes_usage(db_path=USAGE_TRACKING_DB_PATH):
-
-    usernames = fetch_all_usernames_usage(db_path)
-
-    for username in usernames:
-        update_user_bytes_usage(username, db_path)
-
-
-def usage_daily_wipe(db_path=USAGE_TRACKING_DB_PATH):
+def usage_daily_wipe(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
 
@@ -463,7 +439,7 @@ def usage_daily_wipe(db_path=USAGE_TRACKING_DB_PATH):
     con.close()
 
 
-def usage_monthly_wipe(db_path=USAGE_TRACKING_DB_PATH):
+def usage_monthly_wipe(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
 
@@ -477,7 +453,7 @@ def usage_monthly_wipe(db_path=USAGE_TRACKING_DB_PATH):
     con.close()
 
 
-def fetch_daily_bytes_usage(username, db_path=USAGE_TRACKING_DB_PATH):
+def fetch_daily_bytes_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path)  # Connects to database
     # Need to add try blocks and error catching for all of these things at some point.
     try:
@@ -498,8 +474,8 @@ def fetch_daily_bytes_usage(username, db_path=USAGE_TRACKING_DB_PATH):
         con.close()
 
 
-def fetch_daily_high_speed_quota_bytes_for_user_usage(
-    username, db_path=USAGE_TRACKING_DB_PATH
+def fetch_high_speed_quota_for_user_usage(
+    username, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
@@ -510,27 +486,30 @@ def fetch_daily_high_speed_quota_bytes_for_user_usage(
 
     cur.execute(
         """
-    SELECT g.daily_high_speed_quota_bytes
+    SELECT g.high_speed_quota
     FROM users u
     JOIN group_users gu ON u.id = gu.user_id
-    JOIN groups g ON gu.id = gu.group_id
+    JOIN groups g ON g.id = gu.group_id
     WHERE u.username = ?
     """,
         (username,),
     )
 
-    quota_bytes = cur.fetchone()[0]
+    quota_bytes = cur.fetchone()
 
     con.commit()
     con.close()
 
-    return quota_bytes
+    if quota_bytes is not None:
+        return quota_bytes[0]
+    else:
+        return None
 
 
 def check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
-    username, db_path=USAGE_TRACKING_DB_PATH
+    username, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
-    quota_bytes = fetch_daily_high_speed_quota_bytes_for_user_usage(username, db_path)
+    quota_bytes = fetch_high_speed_quota_for_user_usage(username, db_path)
 
     usage_bytes = fetch_daily_bytes_usage(username, db_path)
 

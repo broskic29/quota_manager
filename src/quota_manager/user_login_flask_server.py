@@ -10,6 +10,7 @@ import time
 
 import quota_manager.sql_management as sqlm
 import quota_manager.nftables_management as nftm
+import quota_manager.quota_management as qm
 
 user_login_app = Flask(__name__)
 
@@ -72,21 +73,6 @@ def authenticate_radius(username, password, ip_address, mac_address):
         return False
 
 
-# --- Session cleanup thread ---
-def cleanup_sessions():
-    while True:
-        now = time.time()
-        for mac_address in list(active_sessions.keys()):
-            if active_sessions[mac_address] < now:
-                # Remove nftables rule for expired user
-                nftm.delete_user_from_set(mac_address)
-                del active_sessions[mac_address]
-        time.sleep(60)
-
-
-threading.Thread(target=cleanup_sessions, daemon=True).start()
-
-
 # --- Routes ---
 @user_login_app.route("/", methods=["GET", "POST"])
 def login():
@@ -107,7 +93,8 @@ def login():
 
                 # has to be part of the daemon process to regularly update amount of bytes used total by user.
                 # This just calls the function to ensure that nothing is lost when the MAC address is updated.
-                sqlm.update_user_bytes_usage(username, mac_reset=True)
+                user_bytes = qm.fetch_user_bytes(username)
+                sqlm.update_user_bytes_usage(user_bytes, username, mac_reset=True)
 
                 nftm.operation_on_set_element(
                     "delete",
@@ -126,8 +113,10 @@ def login():
                 user_mac,
             )
 
-            # Record session expiration
-            active_sessions[user_mac] = time.time() + SESSION_TIMEOUT
+            qm.update_all_users_bytes()
+
+            qm.enforce_quotas_all_users()
+
             return f"<h3>Login successful!</h3><p>User device {user_mac} at {user_ip} now has Internet access.</p>"
         else:
             error = "Invalid username or password"

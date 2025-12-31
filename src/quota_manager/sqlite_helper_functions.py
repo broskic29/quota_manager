@@ -1,13 +1,12 @@
 import sqlite3
 
+RADIUS_DB_PATH = "/var/lib/radius/freeradius.db"
+USAGE_TRACKING_DB_PATH = "/var/lib/radius/usage_tracking.db"
+DEFAULT_SCHEMA_PATH = "/etc/freeradius3/mods-config/sql/main/sqlite/schema.sql"
 
-def connect_to_db(db_path="/var/lib/radius/freeradius.db"):
-    con = sqlite3.connect(db_path)  # Connects to database
-    return con  # Creates cursor object
 
-
-def check_if_table_exists(table_name, db_path="/var/lib/radius/freeradius.db"):
-    con = connect_to_db(db_path)
+def check_if_table_exists(table_name, db_path=RADIUS_DB_PATH):
+    con = sqlite3.connect(db_path)
     cur = con.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table_name,)
@@ -15,15 +14,25 @@ def check_if_table_exists(table_name, db_path="/var/lib/radius/freeradius.db"):
     return cur.fetchone()
 
 
-def fetch_all_tables(db_path="/var/lib/radius/freeradius.db"):
-    con = connect_to_db(db_path)
+def delete_table(table_name, db_path):
+    con = sqlite3.connect(db_path)
+    cur = con.cursor()
+
+    cur.execute(f"DROP TABLE IF EXISTS {table_name};")
+
+    con.commit()
+    con.close()
+
+
+def fetch_all_tables(db_path):
+    con = sqlite3.connect(db_path)
     cur = con.cursor()
     res = cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
     return res.fetchall()
 
 
-def fetch_all_columns(db_path="/var/lib/radius/freeradius.db", table="radcheck"):
-    con = connect_to_db(db_path)
+def fetch_all_columns(db_path, table):
+    con = sqlite3.connect(db_path)
     cur = con.cursor()
     res = cur.execute(f"PRAGMA table_info({table});")
     columns = res.fetchall()
@@ -46,7 +55,7 @@ def update_field(username, password, table, field, value, db_path):
     con.close()
 
 
-def print_all_radius_user_information(db_path="/var/lib/radius/freeradius.db"):
+def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
     res = cur.execute("SELECT username, attribute, value FROM radcheck;")
@@ -55,7 +64,7 @@ def print_all_radius_user_information(db_path="/var/lib/radius/freeradius.db"):
         print(row)
 
 
-def print_all_radius_accounting_information(db_path="/var/lib/radius/freeradius.db"):
+def print_all_radius_accounting_information(db_path=RADIUS_DB_PATH):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
     res = cur.execute("SELECT username, attribute, value FROM radacct;")
@@ -64,10 +73,10 @@ def print_all_radius_accounting_information(db_path="/var/lib/radius/freeradius.
         print(row)
 
 
-def print_all_usage_user_information(db_path="/var/lib/radius/usage.db"):
+def print_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path)  # Connects to database
     cur = con.cursor()
-    res = cur.execute("SELECT * FROM usage;")
+    res = cur.execute(f"SELECT * FROM {table};")
     rows = res.fetchall()
     for row in rows:
         print(row)

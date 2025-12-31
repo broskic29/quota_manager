@@ -3,8 +3,8 @@ import json
 
 # Need to figure out what default will be here. Use captive table, or modify fw4 table?
 TABLE_FAMILY = "inet"
-CAPTIVE_TABLE_NAME = "captive"
-THROTTLE_TABLE_NAME = "throttle"
+CAPTIVE_TABLE_NAME = "fw4"
+THROTTLE_TABLE_NAME = "fw4"
 AUTH_SET_NAME = "authorized_users"
 THROTTLE_SET_NAME = "throttled_users"
 HIGH_SPEED_SET_NAME = "high_speed_users"
@@ -35,29 +35,41 @@ def operation_on_set_element(operation, table_family, table_name, set_name, elem
     rc, output, error = nft.json_cmd(cmd_dict)
 
 
-def get_bytes_from_user(table_family, mac_address):
+def get_bytes_from_user(user_mac):
     nft = nftables.Nftables()
     nft.set_json_output(True)
+    rc, output, error = nft.cmd(
+        f"list set {TABLE_FAMILY} {CAPTIVE_TABLE_NAME} {AUTH_SET_NAME}"
+    )
+    sets = json.loads(output)["nftables"]
 
-    rc, output, error = nft.cmd(f"list counter {table_family} filter {mac_address}")
+    elements = sets[1]["set"]["elem"]
+    user_bytes = [
+        elem["elem"]["counter"]["bytes"]
+        for elem in elements
+        if elem["elem"]["val"] == user_mac
+    ]
 
-    counters = json.loads(output)["nftables"]
+    if user_bytes is not None:
+        user_bytes = user_bytes[0]
+    else:
+        print("User MAC address not in Authorized Users set")
+        user_bytes = None
 
-    return counters[1]["counter"]["bytes"]
+    return user_bytes
 
 
-def get_bytes_from_all_users(table_family):
+def get_bytes_from_all_users():
     nft = nftables.Nftables()
     nft.set_json_output(True)
-
-    rc, output, error = nft.cmd(f"list counter {table_family}")
-
-    output_dict = json.loads(output)["nftables"]
-
-    counters = [o["counter"] for o in output_dict if "counter" in o]
-
-    counter_dict = {counter["name"]: counter["bytes"] for counter in counters}
-
+    rc, output, error = nft.cmd(
+        f"list set {TABLE_FAMILY} {CAPTIVE_TABLE_NAME} {AUTH_SET_NAME}"
+    )
+    sets = json.loads(output)["nftables"]
+    elements = sets[1]["set"]["elem"]
+    counter_dict = {
+        elem["elem"]["val"]: elem["elem"]["counter"]["bytes"] for elem in elements
+    }
     return counter_dict
 
 
