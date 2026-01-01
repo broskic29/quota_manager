@@ -1,5 +1,5 @@
 import asyncio
-import signal
+import threading
 import logging
 from waitress import serve
 
@@ -23,13 +23,14 @@ class QuotaManagerApp:
 
         self.tasks.append(asyncio.create_task(self._run_daemon()))
 
-        self._run_flask()
+        threading.Thread(target=self._run_flask, daemon=True).start()
 
         await self.shutdown_event.wait()
         await self.stop()
 
     async def _run_daemon(self):
         try:
+            log.info("Usage daemon started")
             await daemon()
         except asyncio.CancelledError:
             log.info("Usage daemon cancelled")

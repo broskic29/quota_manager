@@ -1,4 +1,5 @@
 import sqlite3
+import logging
 
 from pathlib import Path
 import subprocess
@@ -7,18 +8,20 @@ import flask
 
 import quota_manager.sqlite_helper_functions as sqlh
 
+log = logging.getLogger(__name__)
+
 
 # --- Database setup ---
 def init_freeradius_db():
     p = Path(sqlh.RADIUS_DB_PATH)
 
     if not p.exists():
-        print("Path doesn't exist!")
+        log.info("RADIUS database doesn't exist!")
         with open(sqlh.RADIUS_DB_PATH, "a") as f:
             pass
 
     if not sqlh.check_if_table_exists("radcheck"):
-        print("Table doesn't exist!")
+        log.info("RADIUS Radcheck table doesn't exist!")
         with open(sqlh.DEFAULT_SCHEMA_PATH, "r") as f:
             subprocess.run(["sqlite3", sqlh.RADIUS_DB_PATH], stdin=f, check=True)
 
@@ -83,7 +86,9 @@ def insert_user_radius(
     password,
     db_path=sqlh.RADIUS_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     cur.execute(
         """
@@ -123,7 +128,7 @@ def modify_username_radius(
     new_username,
     db_path=sqlh.RADIUS_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cursor = con.cursor()
 
     query = f"""
@@ -154,7 +159,7 @@ def modify_user_password_radius(
     password,
     db_path=sqlh.RADIUS_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cursor = con.cursor()
 
     query = f"""
@@ -184,7 +189,9 @@ def delete_user_radius(
     username,
     db_path=sqlh.RADIUS_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     # Delete from authentication table
     cur.execute("DELETE FROM radcheck WHERE username = ?", (username,))
@@ -196,7 +203,7 @@ def delete_user_radius(
     cur.execute("DELETE FROM radacct WHERE username = ?", (username,))
     con.commit()
     con.close()
-    print(f"User '{username}' deleted successfully.")
+    log.info(f"User '{username}' deleted successfully.")
 
 
 def insert_user_usage(
@@ -205,7 +212,9 @@ def insert_user_usage(
     ip_address,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     cur.execute(
         """
@@ -236,7 +245,9 @@ def create_group_usage(
     throttled_quota,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     cur.execute(
         """
@@ -263,12 +274,13 @@ def create_group_usage(
     con.close()
 
 
-def insert_user_into_group_usage(
-    group_name,
+def remove_user_from_group_usage(
     username,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     cur.execute("PRAGMA foreign_keys = ON;")
     cur.execute(
@@ -280,6 +292,32 @@ def insert_user_into_group_usage(
     """,
         (username,),
     )
+    con.commit()
+    con.close()
+
+
+def insert_user_into_group_usage(
+    group_name,
+    username,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
+):
+    remove_user_from_group_usage(username)
+
+    # Raise error if user doesn't exist or if group doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise KeyError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute("PRAGMA foreign_keys = ON;")
+
     cur.execute(
         """
     INSERT OR IGNORE INTO group_users (group_id, user_id)
@@ -294,14 +332,10 @@ def insert_user_into_group_usage(
     con.close()
 
 
-def login_user_usage(
-    username,
-    mac_address,
-    ip_address,
-    db_path=sqlh.USAGE_TRACKING_DB_PATH,
-):
-    con = sqlite3.connect(db_path)  # Connects to database
-
+def select_user_row(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     cur.execute(
         """
@@ -312,6 +346,22 @@ def login_user_usage(
         (username,),
     )
     row = cur.fetchone()
+    con.close()
+    return row
+
+
+def login_user_usage(
+    username,
+    mac_address,
+    ip_address,
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
+):
+    row = select_user_row(username)
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
 
     # This should update the user if it already exists,
     # otherwise, create new user.
@@ -332,6 +382,8 @@ def login_user_usage(
             """,
             values + [username],
         )
+
+        log.info(f"User {username} successfully updated.")
 
         try:
             return (
@@ -356,17 +408,29 @@ def delete_user_usage(
     username,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
     # Delete from authentication table
     cur.execute("DELETE FROM users WHERE username = ?", (username,))
     con.commit()
     con.close()
-    print(f"User '{username}' deleted successfully.")
+    log.info(f"User '{username}' deleted successfully.")
 
 
 def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
-    con = sqlite3.connect(db_path)
+
+    # Raise error if user doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise KeyError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
 
     cur.execute(
@@ -379,13 +443,34 @@ def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     )
     res = cur.fetchone()
     if res is None:
-        print(f"No mac_address can be found for user: {username}")
+        log.info(f"No MAC address can be found for user: {username}")
         return res
-    return cur.fetchone()[0]
+    return res[0]
+
+
+def get_username_from_mac_address_usage(
+    mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cur = con.cursor()
+
+    cur.execute(
+        """
+        SELECT username
+        FROM users
+        WHERE mac_address = ?
+        """,
+        (mac_address,),
+    )
+    res = cur.fetchone()
+    if res is None:
+        log.info(f"No username can be found for MAC address: {mac_address}")
+        return res
+    return res[0]
 
 
 def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
     cur.execute(
         """
@@ -399,11 +484,21 @@ def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
 def update_user_bytes_usage(
     user_bytes, username, mac_reset=False, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
-
-    con = sqlite3.connect(db_path)  # Connects to database
-    cur = con.cursor()
-
     session_bytes = user_bytes if not mac_reset else 0
+
+    # Raise error if user doens't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise KeyError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
 
     cur.execute(
         """
@@ -421,12 +516,16 @@ def update_user_bytes_usage(
         ),
     )
 
+    # Should really add error checking here...
+
     con.commit()
     con.close()
 
 
 def usage_daily_wipe(db_path=sqlh.USAGE_TRACKING_DB_PATH):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
 
     cur.execute(
@@ -440,7 +539,9 @@ def usage_daily_wipe(db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
 
 def usage_monthly_wipe(db_path=sqlh.USAGE_TRACKING_DB_PATH):
-    con = sqlite3.connect(db_path)  # Connects to database
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
 
     cur.execute(
@@ -454,10 +555,22 @@ def usage_monthly_wipe(db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
 
 def fetch_daily_bytes_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
-    con = sqlite3.connect(db_path)  # Connects to database
+    # Raise error if user doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise KeyError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     # Need to add try blocks and error catching for all of these things at some point.
     try:
         cur = con.cursor()
+
         cur.execute(
             """
             SELECT daily_usage_bytes
@@ -468,6 +581,9 @@ def fetch_daily_bytes_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
         )
         row = cur.fetchone()
         if row is None:
+            log.info(
+                f"ERROR: Operation to fetch daily usage failed for user {username}."
+            )
             return None
         return row[0]
     finally:
@@ -477,12 +593,35 @@ def fetch_daily_bytes_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 def fetch_high_speed_quota_for_user_usage(
     username, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
-    con = sqlite3.connect(db_path)  # Connects to database
+    # Raise error if user doesn't exist, isn't in group, or if group doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise KeyError(f"User {username} does not exist.")
+
+    user_in_group = check_if_user_in_any_group(username)
+
+    if not user_in_group:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not assigned to a group."
+        )
+        raise KeyError(f"User {username} not assigned to a group.")
+
+    table_empty = sqlh.check_if_table_empty("groups", db_path)
+
+    if table_empty:
+        log.error(f"Failed fetching quota_bytes for user {username}: no groups exist.")
+        raise KeyError(f"No groups exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
 
     cur.execute("PRAGMA foreign_keys = ON;")
-
-    cur.execute("BEGIN;")
 
     cur.execute(
         """
@@ -500,10 +639,13 @@ def fetch_high_speed_quota_for_user_usage(
     con.commit()
     con.close()
 
-    if quota_bytes is not None:
-        return quota_bytes[0]
-    else:
-        return None
+    if quota_bytes is None:
+        log.error(
+            f"ERROR: Operation to fetch high speed data quota failed for user {username}."
+        )
+        raise TypeError(f"Quota bytes undefined for user {username}")
+
+    return quota_bytes[0]
 
 
 def check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
@@ -517,3 +659,44 @@ def check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
         return True
     else:
         return False
+
+
+def check_if_user_in_any_group(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT username
+        FROM users u
+        JOIN group_users gu ON u.id = gu.user_id
+        WHERE username = ?
+        """,
+        (username,),
+    )
+    res = cur.fetchall()
+    con.close()
+    if len(res) < 1:
+        return False
+    return True
+
+
+def check_if_user_exists(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT username
+        FROM users
+        WHERE username = ?
+        """,
+        (username,),
+    )
+    res = cur.fetchall()
+    con.close()
+    if len(res) < 1:
+        return False
+    return True

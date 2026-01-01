@@ -1,5 +1,6 @@
 import nftables
 import json
+import logging
 
 # Need to figure out what default will be here. Use captive table, or modify fw4 table?
 TABLE_FAMILY = "inet"
@@ -8,6 +9,14 @@ THROTTLE_TABLE_NAME = "fw4"
 AUTH_SET_NAME = "authorized_users"
 THROTTLE_SET_NAME = "throttled_users"
 HIGH_SPEED_SET_NAME = "high_speed_users"
+
+log = logging.getLogger(__name__)
+
+
+class NFTSetMissingElementError(Exception):
+    """Raised when an nftables set is missing an element it really should have."""
+
+    pass
 
 
 def operation_on_set_element(operation, table_family, table_name, set_name, element):
@@ -43,20 +52,29 @@ def get_bytes_from_user(user_mac):
     )
     sets = json.loads(output)["nftables"]
 
+    elements = sets[1]["set"]
+
+    if not "elem" in sets[1]["set"]:
+        log.error(
+            f"ERROR: Operation to fetch usage failed for user {user_mac}: set empty."
+        )
+        raise NFTSetMissingElementError(f"Authorized users set empty.")
+
     elements = sets[1]["set"]["elem"]
+
     user_bytes = [
         elem["elem"]["counter"]["bytes"]
         for elem in elements
         if elem["elem"]["val"] == user_mac
     ]
 
-    if user_bytes is not None:
-        user_bytes = user_bytes[0]
-    else:
-        print("User MAC address not in Authorized Users set")
-        user_bytes = None
+    if len(user_bytes) < 1:
+        log.error(
+            f"ERROR: Operation to fetch usage failed for user {user_mac}: MAC address not in set."
+        )
+        raise TypeError(f"Usage bytes undefined for user {user_mac}")
 
-    return user_bytes
+    return user_bytes[0]
 
 
 def get_bytes_from_all_users():
@@ -95,3 +113,31 @@ def flush_set(table_family, table_name, set_name):
 
     # Send to nftables
     rc, out, err = nft.json_cmd(flush_payload)
+
+
+def check_if_elem_in_set(test_elem, table_family, table_name, set_name):
+    nft = nftables.Nftables()
+    nft.set_json_output(True)
+
+    # Build the JSON payload
+    set_payload = {
+        "nftables": [
+            {
+                "list": {
+                    "set": {
+                        "family": table_family,
+                        "table": table_name,
+                        "name": set_name,
+                    }
+                }
+            }
+        ]
+    }
+
+    rc, out, err = nft.json_cmd(set_payload)
+
+    elements = out["nftables"][1]["set"]["elem"]
+
+    res = [elem["elem"]["val"] for elem in elements if test_elem in elem["elem"]["val"]]
+
+    return bool(res)
