@@ -10,18 +10,36 @@ import quota_manager.sqlite_helper_functions as sqlh
 
 log = logging.getLogger(__name__)
 
+LOGGED_OUT = 0
+LOGGED_IN = 1
+
+
+class UserNameError(Exception):
+    """Raised when a user does not exist."""
+
+    pass
+
+
+class GroupNameError(Exception):
+    """Raised when a group does not exist."""
+
+    pass
+
 
 # --- Database setup ---
 def init_freeradius_db():
     p = Path(sqlh.RADIUS_DB_PATH)
 
     if not p.exists():
-        log.info("RADIUS database doesn't exist!")
+        log.debug("RADIUS database doesn't exist!")
         with open(sqlh.RADIUS_DB_PATH, "a") as f:
             pass
 
+    # Logic fails if radcheck doesn't exist but the other tables in the schema
+    # do exist. Will throw an error
+    # Need to make this smarter.
     if not sqlh.check_if_table_exists("radcheck"):
-        log.info("RADIUS Radcheck table doesn't exist!")
+        log.debug("RADIUS Radcheck table doesn't exist!")
         with open(sqlh.DEFAULT_SCHEMA_PATH, "r") as f:
             subprocess.run(["sqlite3", sqlh.RADIUS_DB_PATH], stdin=f, check=True)
 
@@ -36,12 +54,13 @@ def init_usage_db():
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL,
-        mac_address TEXT NOT NULL,
+        mac_address TEXT,
         ip_address TEXT,
         daily_usage_bytes INTEGER NOT NULL DEFAULT 0,
         monthly_usage_bytes INTEGER NOT NULL DEFAULT 0,
         session_total_bytes INTEGER NOT NULL DEFAULT 0,
         all_time_bytes INTEGER NOT NULL DEFAULT 0,
+        logged_in INTEGER NOT NULL DEFAULT 0,
         UNIQUE(username)
     );
     """
@@ -218,10 +237,10 @@ def insert_user_usage(
     cur = con.cursor()
     cur.execute(
         """
-    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, logged_in)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     """,
-        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0),
+        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, LOGGED_OUT),
     )
     user_id = cur.lastrowid
     # try:
@@ -308,9 +327,17 @@ def insert_user_into_group_usage(
 
     if not user_exists:
         log.error(
-            f"Failed fetching quota_bytes for user {username}: not found in users table."
+            f"Failed to insert user {username} into group {group_name}: user not found in users table."
         )
-        raise KeyError(f"User {username} does not exist.")
+        raise UserNameError(f"User {username} does not exist.")
+
+    group_exists = check_if_group_exists(group_name)
+
+    if not group_exists:
+        log.error(
+            f"Failed to insert user {username} into group {group_name}: group not found in groups table."
+        )
+        raise KeyError(f"Group {group_name} does not exist.")
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -373,6 +400,7 @@ def login_user_usage(
         values = list(row)
         values[2] = mac_address
         values[3] = ip_address
+        values[8] = LOGGED_IN
 
         cur.execute(
             f"""
@@ -426,9 +454,9 @@ def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
     if not user_exists:
         log.error(
-            f"Failed fetching quota_bytes for user {username}: not found in users table."
+            f"Failed fetching MAC address for user {username}: not found in users table."
         )
-        raise KeyError(f"User {username} does not exist.")
+        raise UserNameError(f"User {username} does not exist.")
 
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
@@ -443,7 +471,7 @@ def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     )
     res = cur.fetchone()
     if res is None:
-        log.info(f"No MAC address can be found for user: {username}")
+        log.debug(f"No MAC address can be found for user: {username}")
         return res
     return res[0]
 
@@ -464,7 +492,7 @@ def get_username_from_mac_address_usage(
     )
     res = cur.fetchone()
     if res is None:
-        log.info(f"No username can be found for MAC address: {mac_address}")
+        log.debug(f"No username can be found for MAC address: {mac_address}")
         return res
     return res[0]
 
@@ -493,7 +521,7 @@ def update_user_bytes_usage(
         log.error(
             f"Failed fetching quota_bytes for user {username}: not found in users table."
         )
-        raise KeyError(f"User {username} does not exist.")
+        raise UserNameError(f"User {username} does not exist.")
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -562,7 +590,7 @@ def fetch_daily_bytes_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
         log.error(
             f"Failed fetching quota_bytes for user {username}: not found in users table."
         )
-        raise KeyError(f"User {username} does not exist.")
+        raise UserNameError(f"User {username} does not exist.")
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -581,7 +609,7 @@ def fetch_daily_bytes_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
         )
         row = cur.fetchone()
         if row is None:
-            log.info(
+            log.error(
                 f"ERROR: Operation to fetch daily usage failed for user {username}."
             )
             return None
@@ -600,7 +628,7 @@ def fetch_high_speed_quota_for_user_usage(
         log.error(
             f"Failed fetching quota_bytes for user {username}: not found in users table."
         )
-        raise KeyError(f"User {username} does not exist.")
+        raise UserNameError(f"User {username} does not exist.")
 
     user_in_group = check_if_user_in_any_group(username)
 
@@ -608,7 +636,7 @@ def fetch_high_speed_quota_for_user_usage(
         log.error(
             f"Failed fetching quota_bytes for user {username}: not assigned to a group."
         )
-        raise KeyError(f"User {username} not assigned to a group.")
+        raise UserNameError(f"User {username} not assigned to a group.")
 
     table_empty = sqlh.check_if_table_empty("groups", db_path)
 
@@ -700,3 +728,45 @@ def check_if_user_exists(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     if len(res) < 1:
         return False
     return True
+
+
+def check_if_group_exists(group_name, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT group_name
+        FROM groups
+        WHERE group_name = ?
+        """,
+        (group_name,),
+    )
+    res = cur.fetchall()
+    con.close()
+    if len(res) < 1:
+        return False
+    return True
+
+
+def check_if_user_logged_in(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT logged_in
+        FROM users
+        WHERE username = ?
+        """,
+        (username,),
+    )
+    res = cur.fetchone()
+    con.close()
+    if res is None:
+        raise UserNameError(f"User {username} does not exist.")
+
+    logged_in = res[0]
+    return bool(logged_in)

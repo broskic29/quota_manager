@@ -73,11 +73,11 @@ def usage_updater():
     while True:
         sleep(UPDATE_INTERVAL)
 
-        log.info("Updating user byte totals...")
+        log.debug("Updating user byte totals...")
         usage_dict = qm.update_all_users_bytes()
         log.debug(usage_dict)
 
-        log.info("Enforcing quotas...")
+        log.debug("Enforcing quotas...")
         quota_dict = qm.enforce_quotas_all_users()
         log.debug(quota_dict)
 
