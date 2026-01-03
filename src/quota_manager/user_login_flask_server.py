@@ -98,7 +98,7 @@ def login():
             )
 
             ua = request.headers.get("User-Agent", "")
-            log.info(ua)
+            log.debug(ua)
             if "Apple" in ua or "Mac" in ua or "iPhone" in ua:
                 # Apple CNA: return 200 Success to close portal
                 return Response("Success", status=200, mimetype="text/html")
@@ -106,7 +106,7 @@ def login():
                 # Android CNA: redirect 204
                 return redirect("/generate_204")
             else:
-                # Normal browser: show success page
+                # Need to change to redirect to protected route user page at /login/username
                 return render_template_string(
                     "<h3>Login successful!</h3><p>Device {{ mac }} now has Internet access.</p>",
                     mac=user_mac,
@@ -133,8 +133,9 @@ def android_generate_204():
 
     if qm.is_user_authenticated(username, user_mac):
         log.info(
-            f"User {username} authenticated. Loggin in device at {user_mac}/{user_ip}..."
+            f"User {username} authenticated. Logging in device at {user_mac}/{user_ip}..."
         )
+        # Need to change to redirect to user page at /username
         return Response(status=204)
     else:
         return redirect("/login", 302)
@@ -157,6 +158,7 @@ def apple_hotspot_detect():
         log.info(
             f"User {username} authenticated. Loggin in device at {user_mac}/{user_ip}..."
         )
+        # Need to change to redirect to user page at /username
         return Response("", status=200, mimetype="text/plain")
     else:
         return redirect("/login", 302)
