@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 import subprocess
 
-import flask
+from flask import jsonify
 
 import quota_manager.sqlite_helper_functions as sqlh
 
@@ -15,13 +15,25 @@ LOGGED_IN = 1
 
 
 class UserNameError(Exception):
-    """Raised when a user does not exist."""
+    """Raised when a username query returns nothing."""
 
     pass
 
 
 class GroupNameError(Exception):
+    """Raised when a group_name query returns nothing."""
+
+    pass
+
+
+class GroupMissingError(Exception):
     """Raised when a group does not exist."""
+
+    pass
+
+
+class GroupMemberError(Exception):
+    """Raised when a user is not a member of any group."""
 
     pass
 
@@ -29,75 +41,75 @@ class GroupNameError(Exception):
 # --- Database setup ---
 def init_freeradius_db():
     p = Path(sqlh.RADIUS_DB_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
 
     if not p.exists():
         log.debug("RADIUS database doesn't exist!")
-        with open(sqlh.RADIUS_DB_PATH, "a") as f:
-            pass
-
-    # Logic fails if radcheck doesn't exist but the other tables in the schema
-    # do exist. Will throw an error
-    # Need to make this smarter.
-    if not sqlh.check_if_table_exists("radcheck"):
-        log.debug("RADIUS Radcheck table doesn't exist!")
         with open(sqlh.DEFAULT_SCHEMA_PATH, "r") as f:
             subprocess.run(["sqlite3", sqlh.RADIUS_DB_PATH], stdin=f, check=True)
 
 
 # --- Database setup ---
 def init_usage_db():
-    con = sqlite3.connect(sqlh.USAGE_TRACKING_DB_PATH)
-    cur = con.cursor()
+    p = Path(sqlh.USAGE_TRACKING_DB_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
 
-    cur.execute(
+    if not p.exists():
+        with open(sqlh.USAGE_TRACKING_DB_PATH, "a") as f:
+            pass
+
+        con = sqlite3.connect(sqlh.USAGE_TRACKING_DB_PATH)
+        cur = con.cursor()
+
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            mac_address TEXT,
+            ip_address TEXT,
+            daily_usage_bytes INTEGER NOT NULL DEFAULT 0,
+            monthly_usage_bytes INTEGER NOT NULL DEFAULT 0,
+            session_total_bytes INTEGER NOT NULL DEFAULT 0,
+            all_time_bytes INTEGER NOT NULL DEFAULT 0,
+            logged_in INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(username)
+        );
         """
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL,
-        mac_address TEXT,
-        ip_address TEXT,
-        daily_usage_bytes INTEGER NOT NULL DEFAULT 0,
-        monthly_usage_bytes INTEGER NOT NULL DEFAULT 0,
-        session_total_bytes INTEGER NOT NULL DEFAULT 0,
-        all_time_bytes INTEGER NOT NULL DEFAULT 0,
-        logged_in INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(username)
-    );
-    """
-    )
+        )
 
-    cur.execute(
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name TEXT NOT NULL,
+            high_speed_quota INTEGER NOT NULL DEFAULT 0,
+            throttled_quota INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(group_name)
+        );
         """
-    CREATE TABLE IF NOT EXISTS groups (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_name TEXT NOT NULL,
-        high_speed_quota INTEGER NOT NULL DEFAULT 0,
-        throttled_quota INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(group_name)
-    );
-    """
-    )
+        )
 
-    cur.execute(
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS group_users (
+            group_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+
+            PRIMARY KEY (group_id, user_id),
+
+            FOREIGN KEY (group_id) REFERENCES groups(id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+                ON DELETE CASCADE,
+
+            UNIQUE(user_id)
+        );
         """
-    CREATE TABLE IF NOT EXISTS group_users (
-        group_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
+        )
 
-        PRIMARY KEY (group_id, user_id),
-
-        FOREIGN KEY (group_id) REFERENCES groups(id)
-            ON DELETE CASCADE,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE,
-
-        UNIQUE(user_id)
-    );
-    """
-    )
-
-    con.commit()
-    con.close()
+        con.commit()
+        con.close()
 
 
 def insert_user_radius(
@@ -129,7 +141,7 @@ def insert_user_radius(
     # This function should be usable outside of flask.
     # try:
     #     return (
-    #         flask.jsonify(
+    #         jsonify(
     #             {
     #                 "status": "success",
     #                 "message": f"User {username} with user_id {user_id} created.",
@@ -160,7 +172,7 @@ def modify_username_radius(
 
     try:
         return (
-            flask.jsonify(
+            jsonify(
                 {
                     "status": "success",
                     "message": f"User {old_username} changed name to {new_username}.",
@@ -191,7 +203,7 @@ def modify_user_password_radius(
 
     try:
         return (
-            flask.jsonify(
+            jsonify(
                 {
                     "status": "success",
                     "message": f"User {username} password updated.",
@@ -245,7 +257,7 @@ def insert_user_usage(
     user_id = cur.lastrowid
     # try:
     #     return (
-    #         flask.jsonify(
+    #         jsonify(
     #             {
     #                 "status": "success",
     #                 "message": f"User {username} with user_id {user_id} created.",
@@ -278,7 +290,7 @@ def create_group_usage(
     group_id = cur.lastrowid
     # try:
     #     return (
-    #         flask.jsonify(
+    #         jsonify(
     #             {
     #                 "status": "success",
     #                 "message": f"User {username} with user_id {user_id} created.",
@@ -337,7 +349,7 @@ def insert_user_into_group_usage(
         log.error(
             f"Failed to insert user {username} into group {group_name}: group not found in groups table."
         )
-        raise KeyError(f"Group {group_name} does not exist.")
+        raise GroupNameError(f"Group {group_name} does not exist.")
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -390,10 +402,10 @@ def login_user_usage(
     )  # Connects to database
     cur = con.cursor()
 
-    # This should update the user if it already exists,
-    # otherwise, create new user.
+    # This updates the user if it already exists,
+    # otherwise, creates new user.
 
-    # Need to make daily bytes and whatnot carry over...
+    # Carries over daily bytes and whatnot. Need to test...
     if row:
         columns = [column for column in sqlh.fetch_all_columns(db_path, "users")]
         set_clause = ", ".join(f"{col} = ?" for col in columns)
@@ -415,7 +427,7 @@ def login_user_usage(
 
         try:
             return (
-                flask.jsonify(
+                jsonify(
                     {
                         "status": "success",
                         "message": f"User {username} updated.",
@@ -636,13 +648,13 @@ def fetch_high_speed_quota_for_user_usage(
         log.error(
             f"Failed fetching quota_bytes for user {username}: not assigned to a group."
         )
-        raise UserNameError(f"User {username} not assigned to a group.")
+        raise GroupMemberError(f"User {username} not assigned to a group.")
 
     table_empty = sqlh.check_if_table_empty("groups", db_path)
 
     if table_empty:
         log.error(f"Failed fetching quota_bytes for user {username}: no groups exist.")
-        raise KeyError(f"No groups exist.")
+        raise GroupMissingError(f"No groups exist.")
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -671,7 +683,9 @@ def fetch_high_speed_quota_for_user_usage(
         log.error(
             f"ERROR: Operation to fetch high speed data quota failed for user {username}."
         )
-        raise TypeError(f"Quota bytes undefined for user {username}")
+        raise GroupMemberError(
+            f"Quota bytes undefined for user {username}: group membership indeterminate."
+        )
 
     return quota_bytes[0]
 

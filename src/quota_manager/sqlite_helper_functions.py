@@ -1,8 +1,8 @@
 import sqlite3
 import logging
 
-RADIUS_DB_PATH = "/var/lib/radius/freeradius.db"
-USAGE_TRACKING_DB_PATH = "/var/lib/radius/usage_tracking.db"
+RADIUS_DB_PATH = "/overlay/freeradius3/freeradius.db"
+USAGE_TRACKING_DB_PATH = "/overlay/freeradius3/usage_tracking.db"
 DEFAULT_SCHEMA_PATH = "/etc/freeradius3/mods-config/sql/main/sqlite/schema.sql"
 
 
