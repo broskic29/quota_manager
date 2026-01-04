@@ -1,29 +1,14 @@
 from flask import Flask, request, render_template_string, redirect, Response
-from pyrad.client import Client
-from pyrad.dictionary import Dictionary
-from pyrad.packet import AccessRequest, AccessAccept
 
-import socket
 import logging
 
 import quota_manager.sql_management as sqlm
+import quota_manager.nftables_management as nftm
 import quota_manager.quota_management as qm
+import quota_manager.flask_utils as flu
 
 user_login_app = Flask(__name__)
 log = logging.getLogger(__name__)
-
-LOCALHOST = "127.0.0.1"
-
-# FreeRADIUS configuration
-RADIUS_SERVER = LOCALHOST
-RADIUS_SECRET = b"BrFb+sewC8wGFb8+gD2UW3Fjf583PqoE"
-RADIUS_PORT = 1812
-
-DEFAULT_SERVICE_TYPE = "Login-User"
-
-# Logged-in users with expiration
-active_sessions = {}  # {ip: expiration_time}
-SESSION_TIMEOUT = 3600  # seconds (1 hour)
 
 login_form = """
 <h2>Wi-Fi Login</h2>
@@ -38,34 +23,6 @@ login_form = """
 """
 
 
-# --- FreeRADIUS authentication ---
-def authenticate_radius(username, password, ip_address, mac_address):
-    srv = Client(
-        server=RADIUS_SERVER,
-        secret=RADIUS_SECRET,
-        dict=Dictionary("/etc/freeradius3/dictionary"),
-    )
-    srv.AuthPort = RADIUS_PORT
-    req = srv.CreateAuthPacket(
-        code=AccessRequest,
-        User_Name=username,
-        User_Password=password,
-        NAS_IP_Address=LOCALHOST,
-        Framed_IP_Address=ip_address,
-        Calling_Station_Id=mac_address,  # must be of format "00-04-5F-00-0F-D1"
-        Service_Type=DEFAULT_SERVICE_TYPE,
-    )
-    req.add_message_authenticator()
-    try:
-        reply = srv.SendPacket(req)
-        if reply.code == AccessAccept:
-            log.info("RADIUS: User {username} successfully authenticated.")
-            return True
-    except socket.timeout:
-        log.info("RADIUS: User {username} failed to authenticate.")
-        return False
-
-
 # --- Routes ---
 @user_login_app.route("/login", methods=["GET", "POST"])
 def login():
@@ -75,21 +32,31 @@ def login():
         password = request.form["password"]
         user_ip = request.remote_addr
 
-        try:
-            user_mac = qm.mac_from_ip(user_ip)
-        except KeyError:
-            log.warning(f"No MAC address could be found for user {username}.")
-            error = "Login failed. User MAC address could not be determined. Please disconnect from network and try again."
+        USER_LOGIN_ERROR_MESSAGES = {
+            nftm.MACAddressError: f"Login failed. MAC address for user {username} could not be determined. Please disconnect from network and try again.",
+            flu.UndefinedException: "Internal error creating user. Please reload page.",
+        }
+
+        user_mac, error = flu.safe_call(
+            qm.mac_from_ip,
+            error,
+            USER_LOGIN_ERROR_MESSAGES,
+            user_ip,
+        )
+
+        if error:
             return render_template_string(login_form, error=error)
 
-        if authenticate_radius(username, password, user_ip, user_mac):
+        if flu.authenticate_radius(username, password, user_ip, user_mac):
+
+            old_user_mac = None
 
             try:
                 old_user_mac = sqlm.fetch_user_mac_address_usage(username)
-            except KeyError:
-                old_user_mac = None
+            except nftm.MACAddressError:
+                pass
 
-            json_message = sqlm.login_user_usage(username, user_mac, user_ip)
+            sqlm.login_user_usage(username, user_mac, user_ip)
 
             qm.mac_update(old_user_mac, user_mac, username)
 
@@ -113,7 +80,7 @@ def login():
                 )
         else:
             log.info(f"Login unsuccessful. Invalid username or password")
-            error = "Invalid username or password"
+            error = flu.error_appender(error, "Invalid username or password")
     return render_template_string(login_form, error=error)
 
 

@@ -1,8 +1,8 @@
 import sqlite3
 import logging
 
-RADIUS_DB_PATH = "/var/lib/radius/freeradius.db"
-USAGE_TRACKING_DB_PATH = "/var/lib/radius/usage_tracking.db"
+RADIUS_DB_PATH = "/overlay/freeradius3/freeradius.db"
+USAGE_TRACKING_DB_PATH = "/overlay/freeradius3/usage_tracking.db"
 DEFAULT_SCHEMA_PATH = "/etc/freeradius3/mods-config/sql/main/sqlite/schema.sql"
 
 
@@ -15,7 +15,7 @@ def check_if_table_exists(table_name, db_path=RADIUS_DB_PATH):
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table_name,)
     )
-    return cur.fetchone()
+    return bool(cur.fetchone())
 
 
 def delete_table(table_name, db_path):

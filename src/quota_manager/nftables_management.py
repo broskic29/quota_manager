@@ -19,6 +19,12 @@ class NFTSetMissingElementError(Exception):
     pass
 
 
+class MACAddressError(Exception):
+    """Raised when a user does not exist."""
+
+    pass
+
+
 def operation_on_set_element(operation, table_family, table_name, set_name, element):
     nft = nftables.Nftables()
 
@@ -72,7 +78,7 @@ def get_bytes_from_user(user_mac):
         log.error(
             f"ERROR: Operation to fetch usage failed for user {user_mac}: MAC address not in set."
         )
-        raise TypeError(f"Usage bytes undefined for user {user_mac}")
+        raise MACAddressError(f"Usage bytes undefined for user {user_mac}")
 
     return user_bytes[0]
 
