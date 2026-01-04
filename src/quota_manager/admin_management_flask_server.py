@@ -82,10 +82,10 @@ def create_user():
             return render_template_string(new_user_form, error=error)
 
         USER_CREATION_ERROR_MESSAGES = {
-            sqlm.UserNameError: f"Failed inserting user {username} into group {group_name}: No user by username {username} exists.",
-            sqlm.GroupNameError: f"Failed inserting user {username} into group {group_name}: No group by name {group_name} exists.",
-            IntegrityError: f"Failed to create user: User {username} already exists in database.",
-            flu.UndefinedException: "Internal error creating user. Please reload page.",
+            sqlm.UserNameError: f"Failed to create user {username}: User already exists.\n",
+            sqlm.GroupNameError: f"Failed inserting user {username} into group {group_name}: No group by name {group_name} exists.\n",
+            IntegrityError: f"Failed to create user {username}: User already exists.\n",
+            flu.UndefinedException: f"Internal error creating user {username}. Please reload page.\n",
         }
 
         _, error = flu.safe_call(
@@ -98,20 +98,11 @@ def create_user():
         )
 
         _, error = flu.safe_call(
-            sqlm.insert_user_usage,
+            sqlm.create_user_usage,
             error,
             USER_CREATION_ERROR_MESSAGES,
             username,
-            mac_address="00:00:00:00:00",
-            ip_address="0.0.0.0",
-        )
-
-        _, error = flu.safe_call(
-            sqlm.insert_user_into_group_usage,
-            error,
-            USER_CREATION_ERROR_MESSAGES,
             group_name,
-            username,
         )
 
         if error:
@@ -134,8 +125,6 @@ def create_group():
         group_name = data.get("group_name")
 
         error = flu.error_appender(error, flu.validate_name(group_name, "Group name"))
-        if error:
-            return render_template_string(new_group_form, error=error)
 
         # Likely need to change this strucutre. Make an admin page where you can
         # dynamically determine quotas for all groups with a limit. If you input a value,
@@ -164,14 +153,26 @@ def create_group():
         if error:
             return render_template_string(new_group_form, error=error)
 
+        GROUP_CREATION_ERROR_MESSAGES = {
+            IntegrityError: f"Failed to create group {group_name}: Group already exists.\n",
+            flu.UndefinedException: f"Internal error creating user {group_name}. Please reload page.\n",
+        }
+
         high_speed_quota = int(high_speed_quota)
         throttled_quota = int(throttled_quota)
 
-        sqlm.create_group_usage(
-            group_name=group_name,
-            high_speed_quota=high_speed_quota,
-            throttled_quota=throttled_quota,
+        _, error = flu.safe_call(
+            sqlm.create_group_usage,
+            error,
+            GROUP_CREATION_ERROR_MESSAGES,
+            group_name,
+            high_speed_quota,
+            throttled_quota,
         )
+
+        if error:
+            return render_template_string(new_group_form, error=error)
+
         log.info(f"Succesfully created group {group_name}.")
         return render_template_string("<h3>Group creation successful!</h3>")
 

@@ -209,16 +209,21 @@ def unauthorize_user(username):
 
 
 def delete_user_from_system(username):
-    try:
+
+    user_exists_usage = sqlm.check_if_user_exists(username)
+    user_exists_radius = sqlm.check_if_user_exists(
+        username, table_name="radcheck", db_path=sqlh.RADIUS_DB_PATH
+    )
+
+    if user_exists_usage:
         user_mac = sqlm.fetch_user_mac_address_usage(username)
-    except sqlm.UserNameError:
-        log.debug(f"User {username} does not exist.")
-        user_mac = None
-    if user_mac is not None:
         sqlm.delete_user_usage(username)
-        sqlm.delete_user_radius(username)
         delete_mac_from_set(user_mac)
-        log.info(f"Successfully unauthorized user {username}.")
+
+    if user_exists_radius:
+        sqlm.delete_user_radius(username)
+
+    log.info(f"Successfully unauthorized user {username}.")
 
 
 def mac_update(old_mac, new_mac, username):

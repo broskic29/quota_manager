@@ -43,10 +43,15 @@ def init_freeradius_db():
     p = Path(sqlh.RADIUS_DB_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)
 
-    if not p.exists():
+    if not p.exists() or not sqlh.check_if_table_exists(
+        "radcheck", sqlh.RADIUS_DB_PATH
+    ):
         log.debug("RADIUS database doesn't exist!")
-        with open(sqlh.DEFAULT_SCHEMA_PATH, "r") as f:
-            subprocess.run(["sqlite3", sqlh.RADIUS_DB_PATH], stdin=f, check=True)
+        try:
+            with open(sqlh.DEFAULT_SCHEMA_PATH, "r") as f:
+                subprocess.run(["sqlite3", sqlh.RADIUS_DB_PATH], stdin=f, check=True)
+        except Exception as e:
+            log.error(f"Exception: {e}. Failed to create RADIUS database!")
 
 
 # --- Database setup ---
@@ -55,9 +60,13 @@ def init_usage_db():
     p.parent.mkdir(parents=True, exist_ok=True)
 
     if not p.exists():
+
+        log.debug("Usage tracking database doesn't exist!")
+
         with open(sqlh.USAGE_TRACKING_DB_PATH, "a") as f:
             pass
 
+    try:
         con = sqlite3.connect(sqlh.USAGE_TRACKING_DB_PATH)
         cur = con.cursor()
 
@@ -111,31 +120,50 @@ def init_usage_db():
         con.commit()
         con.close()
 
+    except Exception as e:
+        log.error(f"Exception: {e}. Failed to create usage_tracking database!")
+
 
 def insert_user_radius(
     username,
     password,
     db_path=sqlh.RADIUS_DB_PATH,
 ):
-    con = sqlite3.connect(
-        db_path, timeout=30, isolation_level=None
-    )  # Connects to database
-    cur = con.cursor()
-    cur.execute(
-        """
-    INSERT INTO radcheck (username, attribute, op, value)
-    VALUES (?, ?, ?, ?)
-    """,
-        (
-            f"{username}",
-            "Cleartext-Password",
-            ":=",
-            f"{password}",
-        ),
+    table_exists = sqlh.check_if_table_exists(
+        table_name="radcheck", db_path=sqlh.RADIUS_DB_PATH
     )
-    user_id = cur.lastrowid
-    con.commit()
-    con.close()
+
+    if not table_exists:
+        log.warning("RADIUS: Table 'radcheck' doesn't exist. Reinitializing...")
+        init_freeradius_db()
+
+    user_exists = check_if_user_exists(
+        username, table_name="radcheck", db_path=sqlh.RADIUS_DB_PATH
+    )
+
+    if not user_exists:
+        con = sqlite3.connect(
+            db_path, timeout=30, isolation_level=None
+        )  # Connects to database
+        cur = con.cursor()
+        cur.execute(
+            """
+        INSERT INTO radcheck (username, attribute, op, value)
+        VALUES (?, ?, ?, ?)
+        """,
+            (
+                f"{username}",
+                "Cleartext-Password",
+                ":=",
+                f"{password}",
+            ),
+        )
+        user_id = cur.lastrowid
+        log.info(f"Successfully created RADIUS user {username} with id {user_id}.")
+        con.commit()
+        con.close()
+    else:
+        log.warning(f"RADIUS user {username} already exists.")
 
     # The below is not working outside of a flask context.
     # This function should be usable outside of flask.
@@ -356,6 +384,57 @@ def insert_user_into_group_usage(
     )  # Connects to database
     cur = con.cursor()
     cur.execute("PRAGMA foreign_keys = ON;")
+
+    cur.execute(
+        """
+    INSERT OR IGNORE INTO group_users (group_id, user_id)
+    SELECT g.id, u.id
+    FROM groups g
+    JOIN users u ON u.username = ?
+    WHERE g.group_name = ?
+    """,
+        (username, group_name),
+    )
+    con.commit()
+    con.close()
+
+
+def create_user_usage(
+    username,
+    group_name,
+    mac_address="00:00:00:00:00",
+    ip_address="0.0.0.0",
+    db_path=sqlh.USAGE_TRACKING_DB_PATH,
+):
+
+    # Raise error if user exists or if group doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if user_exists:
+        log.error(f"Failed to create user {username}: user already exists.")
+        raise UserNameError(f"User {username} already exists.")
+
+    group_exists = check_if_group_exists(group_name)
+
+    if not group_exists:
+        log.error(
+            f"Failed to insert user {username} into group {group_name}: group not found in groups table."
+        )
+        raise GroupNameError(f"Group {group_name} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute("PRAGMA foreign_keys = ON;")
+
+    cur.execute(
+        """
+    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, logged_in)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """,
+        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, LOGGED_OUT),
+    )
 
     cur.execute(
         """
@@ -724,15 +803,17 @@ def check_if_user_in_any_group(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return True
 
 
-def check_if_user_exists(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def check_if_user_exists(
+    username, table_name="users", db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
     cur = con.cursor()
     cur.execute(
-        """
+        f"""
         SELECT username
-        FROM users
+        FROM {table_name}
         WHERE username = ?
         """,
         (username,),

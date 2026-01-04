@@ -8,6 +8,9 @@ from flask import Response
 from werkzeug.security import check_password_hash, generate_password_hash
 from socket import timeout
 
+from quota_manager import sqlite_helper_functions as sqlh
+from quota_manager import sql_management as sqlm
+
 import logging
 import re
 
@@ -61,7 +64,7 @@ def validate_name(name, label):
     name = name.strip()
 
     if not NAME_RE.match(name):
-        return f"Invalid {label}. " "Use 3–32 characters: letters, numbers, ., -, _"
+        return f"Invalid {label}. " "Use 3–32 characters: letters, numbers, ., _"
 
     return None
 
@@ -88,7 +91,8 @@ def error_appender(error, appendage):
     if error is None:
         error = appendage
     else:
-        error += "\n" + appendage
+        if appendage is not None:
+            error += "\n" + appendage
     return error
 
 
@@ -113,10 +117,29 @@ def authenticate_radius(username, password, ip_address, mac_address):
     try:
         reply = srv.SendPacket(req)
         if reply.code == AccessAccept:
-            log.info("RADIUS: User {username} successfully authenticated.")
+            log.info(f"RADIUS: User {username} successfully authenticated.")
             return True
+        else:
+            log.info(
+                f"RADIUS: User {username} failed to authenticate. Reply code: {reply.code}"
+            )
+
+            table_exists = sqlh.check_if_table_exists("radcheck", sqlh.RADIUS_DB_PATH)
+
+            if table_exists:
+                table_empty = sqlh.check_if_table_empty("radcheck", sqlh.RADIUS_DB_PATH)
+                if table_empty:
+                    log.warning(f"RADIUS: Table is empty! Attempting to reinitialize.")
+                    sqlm.init_freeradius_db()
+                    log.info(f"RADIUS: Successfully reinitialized database.")
+            else:
+                log.warning(f"RADIUS: Table doesn't exist! Attempting to reinitialize.")
+                sqlm.init_freeradius_db()
+                log.info(f"RADIUS: Successfully reinitialized database.")
+
+            return False
     except timeout:
-        log.info("RADIUS: User {username} failed to authenticate.")
+        log.info(f"RADIUS: User {username} failed to authenticate.")
         return False
 
 
@@ -125,8 +148,8 @@ def safe_call(fn, error, msgs, *args, **kwargs):
         vals = fn(*args, **kwargs)
     except tuple(msgs) as e:
         log.exception(msgs[type(e)])
-        return vals, error_appender(error, msgs[type(e)])
+        return None, error_appender(error, msgs[type(e)])
     except Exception as e:
         log.exception(msgs["UndefinedException"])
-        return vals, error_appender(error, msgs["UndefinedException"])
+        return None, error_appender(error, msgs["UndefinedException"])
     return vals, error
