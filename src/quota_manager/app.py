@@ -3,10 +3,12 @@ import threading
 import logging
 from waitress import serve
 
-from .usage_tracker import daemon
-from .sql_management import init_freeradius_db, init_usage_db
-from .user_login_flask_server import user_login_app
-from .admin_management_flask_server import admin_management_app
+from quota_manager.usage_tracker import daemon
+from quota_manager.sql_management import init_freeradius_db, init_usage_db
+from quota_manager.user_login_flask_server import user_login_app
+from quota_manager.admin_management_flask_server import admin_management_app
+from quota_manager.disconnect_listener import wifi_listener
+from quota_manager.disconnect_listener import process_disconnect
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +28,12 @@ class QuotaManagerApp:
 
         threading.Thread(target=self._run_login_page, daemon=True).start()
         threading.Thread(target=self._run_admin_page, daemon=True).start()
+
+        stop_event = threading.Event()
+        threading.Thread(target=wifi_listener, args=(stop_event,), daemon=True).start()
+        threading.Thread(
+            target=process_disconnect, args=(stop_event,), daemon=True
+        ).start()
 
         await self.shutdown_event.wait()
         await self.stop()
