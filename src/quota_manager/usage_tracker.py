@@ -81,6 +81,7 @@ def usage_updater():
         quota_dict = qm.enforce_quotas_all_users()
         log.debug(quota_dict)
 
+        log.debug("Updating persistent nft sets...")
         qm.ensure_set_persistence()
 
 

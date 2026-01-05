@@ -325,17 +325,18 @@ def ensure_set_persistence():
 def initialize_nftables_sets():
     p = Path(sqlh.USAGE_TRACKING_DB_PATH).parent / "nft_persistence.pkl"
 
-    with open(p, "rb") as file:
-        elem_dict = pickle.load(file)
+    if p.exists():
+        with open(p, "rb") as file:
+            elem_dict = pickle.load(file)
 
-    for key in elem_dict.keys():
-        elems = elem_dict[key]
+        for key in elem_dict.keys():
+            elems = elem_dict[key]
 
-        for elem in elems:
-            nftm.operation_on_set_element(
-                "add",
-                nftm.TABLE_FAMILY,
-                nftm.CAPTIVE_TABLE_NAME,
-                key,
-                elem["elem"]["val"],
-            )
+            for elem in elems:
+                nftm.operation_on_set_element(
+                    "add",
+                    nftm.TABLE_FAMILY,
+                    nftm.CAPTIVE_TABLE_NAME,
+                    key,
+                    elem["elem"]["val"],
+                )
