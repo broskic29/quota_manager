@@ -5,10 +5,12 @@ from waitress import serve
 
 from quota_manager.usage_tracker import daemon
 from quota_manager.sql_management import init_freeradius_db, init_usage_db
+from .quota_management import initialize_nftables_sets
 from quota_manager.user_login_flask_server import user_login_app
 from quota_manager.admin_management_flask_server import admin_management_app
 from quota_manager.disconnect_listener import wifi_listener
 from quota_manager.disconnect_listener import process_disconnect
+
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +25,8 @@ class QuotaManagerApp:
 
         init_freeradius_db()
         init_usage_db()
+
+        initialize_nftables_sets()
 
         self.tasks.append(asyncio.create_task(self._run_daemon()))
 

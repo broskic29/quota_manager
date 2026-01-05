@@ -34,6 +34,7 @@ def login():
 
         USER_LOGIN_ERROR_MESSAGES = {
             nftm.MACAddressError: f"Login failed. MAC address for user {username} could not be determined. Please disconnect from network and try again.",
+            sqlm.UserNameError: f"Failed attempting to log in user {username}: User does not exist.",
             flu.UndefinedException: "Internal error creating user. Please reload page.",
         }
 
@@ -56,9 +57,76 @@ def login():
             except nftm.MACAddressError:
                 pass
 
-            sqlm.login_user_usage(username, user_mac, user_ip)
+            if error:
+                return render_template_string(login_form, error=error)
 
-            qm.mac_update(old_user_mac, user_mac, username)
+            old_username_for_mac_addresse, _ = flu.safe_call(
+                qm.check_which_user_logged_in_for_mac_address,
+                error,
+                USER_LOGIN_ERROR_MESSAGES,
+                user_mac,
+            )
+
+            if error:
+                return render_template_string(login_form, error=error)
+
+            session_start_bytes = 0
+
+            if old_username_for_mac_addresse:
+
+                session_start_bytes, error = flu.safe_call(
+                    qm.initialize_session_start_bytes,
+                    error,
+                    USER_LOGIN_ERROR_MESSAGES,
+                    user_mac,
+                )
+
+                if error:
+                    return render_template_string(login_form, error=error)
+
+                _, error = flu.safe_call(
+                    qm.log_out_user,
+                    error,
+                    USER_LOGIN_ERROR_MESSAGES,
+                    old_username_for_mac_addresse,
+                )
+
+                if error:
+                    return render_template_string(login_form, error=error)
+
+            _, error = flu.safe_call(
+                sqlm.wipe_session_total_bytes,
+                error,
+                USER_LOGIN_ERROR_MESSAGES,
+                username,
+            )
+
+            if error:
+                return render_template_string(login_form, error=error)
+
+            _, error = flu.safe_call(
+                sqlm.login_user_usage,
+                error,
+                USER_LOGIN_ERROR_MESSAGES,
+                username,
+                user_mac,
+                user_ip,
+                session_start_bytes,
+            )
+
+            if error:
+                return render_template_string(login_form, error=error)
+
+            _, error = flu.safe_call(
+                qm.mac_update,
+                error,
+                USER_LOGIN_ERROR_MESSAGES,
+                old_user_mac,
+                user_mac,
+            )
+
+            if error:
+                return render_template_string(login_form, error=error)
 
             log.info(
                 f"Login successful for {username}! User device {user_mac} at {user_ip} now has Internet access."
@@ -66,14 +134,22 @@ def login():
 
             ua = request.headers.get("User-Agent", "")
             log.debug(ua)
-            if "Apple" in ua or "Mac" in ua or "iPhone" in ua:
+            if "Apple" in ua or "Mac" in ua:
+                return render_template_string(
+                    "<h3>Login successful!</h3><p>Device {{ mac }} now has Internet access.</p>",
+                    mac=user_mac,
+                )
+            elif "iPhone" in ua:
                 # Apple CNA: return 200 Success to close portal
-                return Response("Success", status=200, mimetype="text/html")
+                return Response(
+                    "Success! Please press 'Cancel' and then select the 'Use without internet' option.",
+                    status=200,
+                    mimetype="text/html",
+                )
             elif "Android" in ua:
                 # Android CNA: redirect 204
                 return redirect("/generate_204")
             else:
-                # Need to change to redirect to protected route user page at /login/username
                 return render_template_string(
                     "<h3>Login successful!</h3><p>Device {{ mac }} now has Internet access.</p>",
                     mac=user_mac,
@@ -96,16 +172,7 @@ def android_generate_204():
 
     log.info(f"Login attempt from user at {user_mac}/{user_ip}.")
 
-    username = sqlm.get_username_from_mac_address_usage(user_mac)
-
-    if qm.is_user_authenticated(username, user_mac):
-        log.info(
-            f"User {username} authenticated. Logging in device at {user_mac}/{user_ip}..."
-        )
-        # Need to change to redirect to user page at /username
-        return Response(status=204)
-    else:
-        return redirect("/login", 302)
+    return redirect("/login", 302)
 
 
 @user_login_app.route("/hotspot-detect.html")
@@ -119,24 +186,21 @@ def apple_hotspot_detect():
 
     log.info(f"Login attempt from user at {user_mac}/{user_ip}.")
 
-    username = sqlm.get_username_from_mac_address_usage(user_mac)
-
-    if qm.is_user_authenticated(username, user_mac):
-        log.info(
-            f"User {username} authenticated. Loggin in device at {user_mac}/{user_ip}..."
-        )
-        # Need to change to redirect to user page at /username
-        return Response("", status=200, mimetype="text/plain")
-    else:
-        return redirect("/login", 302)
+    return redirect("/login", 302)
 
 
+@user_login_app.route("/clients3.google.com")
+@user_login_app.route("/connectivitycheck.gstatic.com")
+@user_login_app.route("/connectivitycheck.android.com")
 @user_login_app.route("/connecttest.txt")
 @user_login_app.route("/ncsi.txt")
 def windows_ncsi():
     return redirect("/login", 302)
 
 
+@user_login_app.route("/ipv6.msftncsi.com")
+@user_login_app.route("/ipv4.msftncsi.com")
+@user_login_app.route("/www.msftncsi.com")
 @user_login_app.route("/check_network_status.txt")
 @user_login_app.route("/")
 def linux_nm():
