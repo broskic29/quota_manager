@@ -147,3 +147,33 @@ def check_if_elem_in_set(test_elem, table_family, table_name, set_name):
     res = [elem["elem"]["val"] for elem in elements if test_elem in elem["elem"]["val"]]
 
     return bool(res)
+
+
+def pull_elements_from_custom_sets(table_family, table_name):
+    nft = nftables.Nftables()
+    nft.set_json_output(True)
+    # Build the JSON payload
+    table_payload = {
+        "nftables": [
+            {
+                "list": {
+                    "table": {
+                        "family": table_family,
+                        "name": table_name,
+                    }
+                }
+            }
+        ]
+    }
+
+    rc, out, err = nft.json_cmd(table_payload)
+
+    nft_sets = [item for item in out["nftables"] if "set" in item]
+
+    elem_dict = {
+        nft_set["set"]["name"]: nft_set["set"]["elem"]
+        for nft_set in nft_sets
+        if "elem" in nft_set["set"]
+    }
+
+    return elem_dict
