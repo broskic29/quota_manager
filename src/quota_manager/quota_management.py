@@ -1,5 +1,7 @@
 import logging
+import pickle
 from python_arptable import get_arp_table
+from pathlib import Path
 
 from quota_manager import sql_management as sqlm
 from quota_manager import nftables_management as nftm
@@ -309,3 +311,31 @@ def check_which_user_logged_in_for_mac_address(mac_address):
                 return username
 
     return None
+
+
+def ensure_set_persistence():
+    elem_dict = nftm.pull_elements_from_custom_sets(
+        nftm.TABLE_FAMILY, nftm.CAPTIVE_TABLE_NAME
+    )
+    p = Path(sqlh.USAGE_TRACKING_DB_PATH).parent / "nft_persistence.pkl"
+    with open(p, "wb") as file:
+        pickle.dump(elem_dict, file)
+
+
+def initialize_nftables_sets():
+    p = Path(sqlh.USAGE_TRACKING_DB_PATH).parent / "nft_persistence.pkl"
+
+    with open(p, "rb") as file:
+        elem_dict = pickle.load(file)
+
+    for key in elem_dict.keys():
+        elems = elem_dict[key]
+
+        for elem in elems:
+            nftm.operation_on_set_element(
+                "add",
+                nftm.TABLE_FAMILY,
+                nftm.CAPTIVE_TABLE_NAME,
+                key,
+                elem["elem"]["val"],
+            )

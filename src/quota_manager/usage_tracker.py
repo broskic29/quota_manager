@@ -81,6 +81,8 @@ def usage_updater():
         quota_dict = qm.enforce_quotas_all_users()
         log.debug(quota_dict)
 
+        qm.ensure_set_persistence()
+
 
 async def daemon():
     # Run the scheduler in the background
