@@ -116,6 +116,17 @@ def init_usage_db():
         """
         )
 
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS arp_timeouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mac_address TEXT NOT NULL,
+            last_timestamp INTEGER,
+            timeout INTEGER DEFAULT 0
+        );
+        """
+        )
+
         con.commit()
         con.close()
 

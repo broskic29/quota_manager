@@ -1,4 +1,3 @@
-import asyncio
 import threading
 import datetime as dt
 import logging
@@ -42,8 +41,8 @@ def monthly_delay_calc(now, tz):
     return monthly_delay
 
 
-def wipe_scheduler():
-    while True:
+def wipe_scheduler(stop_event: threading.Event):
+    while not stop_event.is_set():
         tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
         now = dt.datetime.now(tz)
 
@@ -69,9 +68,12 @@ def wipe_scheduler():
         # Add another function call: _reset_user_packet_dropping()
 
 
-def usage_updater():
-    while True:
+def usage_updater(stop_event: threading.Event):
+    while not stop_event.is_set():
         sleep(UPDATE_INTERVAL)
+
+        if stop_event.is_set():
+            break
 
         log.debug("Updating user byte totals...")
         usage_dict = qm.update_all_users_bytes()
@@ -85,15 +87,17 @@ def usage_updater():
         qm.ensure_set_persistence()
 
 
-async def daemon():
-    # Run the scheduler in the background
-    t_wipe_scheduler = threading.Thread(target=wipe_scheduler, daemon=True)
-    t_usage_updater = threading.Thread(target=usage_updater, daemon=True)
+def start_usage_tracking(stop_event: threading.Event):
+    """Start the wipe scheduler and usage updater threads"""
+    t_wipe_scheduler = threading.Thread(
+        target=wipe_scheduler, args=(stop_event,), daemon=True
+    )
+    t_usage_updater = threading.Thread(
+        target=usage_updater, args=(stop_event,), daemon=True
+    )
 
     t_wipe_scheduler.start()
     t_usage_updater.start()
 
-    try:
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        log.info("Usage daemon cancelled")
+    log.info("Usage tracking threads started")
+    return [t_wipe_scheduler, t_usage_updater]

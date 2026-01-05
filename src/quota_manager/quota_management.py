@@ -340,3 +340,9 @@ def initialize_nftables_sets():
                     key,
                     elem["elem"]["val"],
                 )
+
+def update_arp_timeout_db(mac_address, timestamp):
+
+def get_timed_out_users():
+
+def enforce_timeouts(timeout_dict):

@@ -2,14 +2,19 @@ import asyncio
 import threading
 import logging
 from waitress import serve
+from queue import Queue
+from time import sleep
 
-from quota_manager.usage_tracker import daemon
+from quota_manager.usage_tracker import start_usage_tracking
 from quota_manager.sql_management import init_freeradius_db, init_usage_db
 from .quota_management import initialize_nftables_sets
 from quota_manager.user_login_flask_server import user_login_app
 from quota_manager.admin_management_flask_server import admin_management_app
-from quota_manager.disconnect_listener import wifi_listener
-from quota_manager.disconnect_listener import process_disconnect
+from quota_manager.arp_table_timeout_listener import (
+    arp_table_poller,
+    arp_table_timeout_tracking,
+    arp_timeout_enforcer,
+)
 
 
 log = logging.getLogger(__name__)
@@ -17,52 +22,78 @@ log = logging.getLogger(__name__)
 
 class QuotaManagerApp:
     def __init__(self):
-        self.tasks: list[asyncio.Task] = []
-        self.shutdown_event = asyncio.Event()
+        self.stop_event = threading.Event
+        self.event_queue = Queue()
+        self.threads: list[threading.Thread] = []
 
-    async def start(self):
+    def start(self):
         log.info("Starting quota manager")
 
         init_freeradius_db()
         init_usage_db()
-
         initialize_nftables_sets()
 
-        self.tasks.append(asyncio.create_task(self._run_daemon()))
+        self._start_flask_servers()
+        self._start_usage_tracking()
+        self._start_arp_threads()
 
-        threading.Thread(target=self._run_login_page, daemon=True).start()
-        threading.Thread(target=self._run_admin_page, daemon=True).start()
-
-        stop_event = threading.Event()
-        threading.Thread(target=wifi_listener, args=(stop_event,), daemon=True).start()
-        threading.Thread(
-            target=process_disconnect, args=(stop_event,), daemon=True
-        ).start()
-
-        await self.shutdown_event.wait()
-        await self.stop()
-
-    async def _run_daemon(self):
         try:
-            log.info("Usage daemon started")
-            await daemon()
-        except asyncio.CancelledError:
-            log.info("Usage daemon cancelled")
+            while not self.stop_event.is_set():
+                sleep(1)
+        except KeyboardInterrupt:
+            log.info("Keyboard interrupt received, shutting down...")
+            self.stop()
 
-    def _run_login_page(self):
-        # Flask is blocking; this is intentional
+    def _run_flask_servers(self):
         log.info("Starting login page")
-        serve(user_login_app, host="0.0.0.0", port=5000)
+        login_thread = threading.Thread(
+            target=lambda: serve(user_login_app, host="0.0.0.0", port=5000),
+            daemon=True,
+        )
 
-    def _run_admin_page(self):
-        # Flask is blocking; this is intentional
         log.info("Starting admin page")
-        serve(admin_management_app, host="0.0.0.0", port=5001)
+        admin_thread = threading.Thread(
+            target=lambda: serve(admin_management_app, host="0.0.0.0", port=5001),
+            daemon=True,
+        )
 
-    async def stop(self):
-        log.info("Shutting down quota manager")
+        login_thread.start()
+        admin_thread.start()
+        log.info("Flask servers started on ports 5000 and 5001")
 
-        for task in self.tasks:
-            task.cancel()
+    def _start_arp_threads(self):
+        self.arp_threads = [
+            threading.Thread(
+                target=arp_table_poller, args=(self.stop_event,), daemon=True
+            ),
+            threading.Thread(
+                target=arp_table_timeout_tracking, args=(self.stop_event,), daemon=True
+            ),
+            threading.Thread(
+                target=arp_timeout_enforcer, args=(self.stop_event,), daemon=True
+            ),
+        ]
 
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        self.threads.extend(self.arp_threads)
+
+        for t in self.arp_threads:
+            t.start()
+        log.info("Started ARP threads...")
+
+    def _start_usage_tracking(self):
+        usage_tracking_threads = start_usage_tracking(self.stop_event)
+        self.threads.append(usage_tracking_threads)
+        for t in usage_tracking_threads:
+            t.start()
+        log.info("Usage tracking started.")
+
+    def stop(self):
+        log.info("Stopping Quota Manager...")
+
+        # Stop ARP threads
+        self.stop_event.set()
+        for t in self.threads:
+            if t.is_alive():
+                t.join(timeout=5)
+
+        log.info("All threads stopped.")

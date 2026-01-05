@@ -1,5 +1,4 @@
 import argparse
-import asyncio
 import logging
 
 from .app import QuotaManagerApp
@@ -30,9 +29,8 @@ def configure_logging(log_level: str):
 
 
 def main():
-    logging.basicConfig(
-        level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    )
+    args = parse_args()
+    configure_logging(args.log_level)
 
     app = QuotaManagerApp()
-    asyncio.run(app.start())
+    app.start()
