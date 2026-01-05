@@ -35,7 +35,7 @@ def fetch_all_tables(db_path):
     return res.fetchall()
 
 
-def fetch_all_columns(db_path, table):
+def fetch_all_columns(table, db_path):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
     res = cur.execute(f"PRAGMA table_info({table});")

@@ -4,8 +4,6 @@ import logging
 from pathlib import Path
 import subprocess
 
-from flask import jsonify
-
 import quota_manager.sqlite_helper_functions as sqlh
 
 log = logging.getLogger(__name__)
@@ -81,6 +79,7 @@ def init_usage_db():
             monthly_usage_bytes INTEGER NOT NULL DEFAULT 0,
             session_total_bytes INTEGER NOT NULL DEFAULT 0,
             all_time_bytes INTEGER NOT NULL DEFAULT 0,
+            session_start_bytes NOT NULL DEFAULT 0,
             logged_in INTEGER NOT NULL DEFAULT 0,
             UNIQUE(username)
         );
@@ -165,22 +164,6 @@ def insert_user_radius(
     else:
         log.warning(f"RADIUS user {username} already exists.")
 
-    # The below is not working outside of a flask context.
-    # This function should be usable outside of flask.
-    # try:
-    #     return (
-    #         jsonify(
-    #             {
-    #                 "status": "success",
-    #                 "message": f"User {username} with user_id {user_id} created.",
-    #             }
-    #         ),
-    #         201,
-    #     )
-    # finally:
-    #     con.commit()
-    #     con.close()
-
 
 def modify_username_radius(
     old_username,
@@ -198,19 +181,8 @@ def modify_username_radius(
 
     cursor.execute(query, (new_username, old_username))
 
-    try:
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": f"User {old_username} changed name to {new_username}.",
-                }
-            ),
-            200,
-        )
-    finally:
-        con.commit()
-        con.close()
+    con.commit()
+    con.close()
 
 
 def modify_user_password_radius(
@@ -229,19 +201,8 @@ def modify_user_password_radius(
 
     cursor.execute(query, (password, username))
 
-    try:
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": f"User {username} password updated.",
-                }
-            ),
-            200,
-        )
-    finally:
-        con.commit()
-        con.close()
+    con.commit()
+    con.close()
 
 
 def delete_user_radius(
@@ -277,23 +238,12 @@ def insert_user_usage(
     cur = con.cursor()
     cur.execute(
         """
-    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, logged_in)
+    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, session_start_bytes, logged_in)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     """,
-        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, LOGGED_OUT),
+        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, 0, LOGGED_OUT),
     )
-    user_id = cur.lastrowid
-    # try:
-    #     return (
-    #         jsonify(
-    #             {
-    #                 "status": "success",
-    #                 "message": f"User {username} with user_id {user_id} created.",
-    #             }
-    #         ),
-    #         201,
-    #     )
-    # finally:
+
     con.commit()
     con.close()
 
@@ -315,20 +265,7 @@ def create_group_usage(
     """,
         (group_name, high_speed_quota, throttled_quota),
     )
-    group_id = cur.lastrowid
-    # try:
-    #     return (
-    #         jsonify(
-    #             {
-    #                 "status": "success",
-    #                 "message": f"User {username} with user_id {user_id} created.",
-    #             }
-    #         ),
-    #         201,
-    #     )
-    # finally:
-    #     con.commit()
-    #     con.close()
+
     con.commit()
     con.close()
 
@@ -430,10 +367,10 @@ def create_user_usage(
 
     cur.execute(
         """
-    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, logged_in)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, session_start_bytes, logged_in)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """,
-        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, LOGGED_OUT),
+        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, 0, LOGGED_OUT),
     )
 
     cur.execute(
@@ -472,26 +409,29 @@ def login_user_usage(
     username,
     mac_address,
     ip_address,
+    session_start_bytes,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     row = select_user_row(username)
-
-    con = sqlite3.connect(
-        db_path, timeout=30, isolation_level=None
-    )  # Connects to database
-    cur = con.cursor()
 
     # This updates the user if it already exists,
     # otherwise, creates new user.
 
     # Carries over daily bytes and whatnot. Need to test...
     if row:
-        columns = [column for column in sqlh.fetch_all_columns(db_path, "users")]
+        columns = [column for column in sqlh.fetch_all_columns("users", db_path)]
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
+        log.debug(f"Values for user {username}: {values}")
         values[2] = mac_address
         values[3] = ip_address
-        values[8] = LOGGED_IN
+        values[8] = session_start_bytes
+        values[9] = LOGGED_IN
+
+        con = sqlite3.connect(
+            db_path, timeout=30, isolation_level=None
+        )  # Connects to database
+        cur = con.cursor()
 
         cur.execute(
             f"""
@@ -503,24 +443,51 @@ def login_user_usage(
         )
 
         log.info(f"User {username} successfully updated.")
+        sqlh.print_all_table_information("users", db_path=sqlh.USAGE_TRACKING_DB_PATH)
 
-        try:
-            return (
-                jsonify(
-                    {
-                        "status": "success",
-                        "message": f"User {username} updated.",
-                    }
-                ),
-                200,
-            )
-        finally:
-            con.commit()
-            con.close()
+        con.commit()
+        con.close()
+    else:
+        raise UserNameError(
+            f"Failed attempting to log in user {username}: User does not exist."
+        )
 
-    con.close()
 
-    insert_user_usage(username, mac_address, ip_address, db_path)
+def logout_user_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    row = select_user_row(username)
+
+    # This updates the user if it already exists,
+    # otherwise, creates new user.
+
+    # Carries over daily bytes and whatnot. Need to test...
+    if row:
+        columns = [column for column in sqlh.fetch_all_columns("users", db_path)]
+        set_clause = ", ".join(f"{col} = ?" for col in columns)
+        values = list(row)
+        values[9] = LOGGED_OUT
+
+        con = sqlite3.connect(
+            db_path, timeout=30, isolation_level=None
+        )  # Connects to database
+        cur = con.cursor()
+
+        cur.execute(
+            f"""
+            UPDATE users
+            SET {set_clause}
+            WHERE username = ?
+            """,
+            values + [username],
+        )
+
+        log.info(f"User {username} successfully logged out.")
+
+        con.commit()
+        con.close()
+    else:
+        raise UserNameError(
+            f"Failed attempting to log out user {username}: User does not exist."
+        )
 
 
 def delete_user_usage(
@@ -567,7 +534,7 @@ def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return res[0]
 
 
-def get_username_from_mac_address_usage(
+def get_usernames_from_mac_address_usage(
     mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
@@ -581,11 +548,11 @@ def get_username_from_mac_address_usage(
         """,
         (mac_address,),
     )
-    res = cur.fetchone()
-    if res is None:
-        log.debug(f"No username can be found for MAC address: {mac_address}")
-        return res
-    return res[0]
+    res = cur.fetchall()
+    if len(res) < 1:
+        log.debug(f"No usernames can be found for MAC address: {mac_address}")
+        return None
+    return [entry[0] for entry in res]
 
 
 def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
@@ -600,12 +567,8 @@ def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return [entry[0] for entry in cur.fetchall()]
 
 
-def update_user_bytes_usage(
-    user_bytes, username, mac_reset=False, db_path=sqlh.USAGE_TRACKING_DB_PATH
-):
-    session_bytes = user_bytes if not mac_reset else 0
-
-    # Raise error if user doens't exist
+def fetch_session_total_bytes(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    # Raise error if user doesn't exist
     user_exists = check_if_user_exists(username)
 
     if not user_exists:
@@ -617,20 +580,160 @@ def update_user_bytes_usage(
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
+    # Need to add try blocks and error catching for all of these things at some point.
+    try:
+        cur = con.cursor()
+
+        cur.execute(
+            """
+            SELECT session_total_bytes
+            FROM users
+            WHERE username = ?
+            """,
+            (username,),
+        )
+
+        res = cur.fetchone()
+
+        if res is None:
+            log.error(
+                f"ERROR: Operation to fetch byte information failed for user {username}."
+            )
+            return res
+
+        session_total_bytes = res[0]
+
+        log.debug(f"Session_total_bytes: {session_total_bytes}")
+
+        return session_total_bytes
+
+    finally:
+        con.close()
+
+
+def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    # Raise error if user doens't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise UserNameError(f"User {username} does not exist.")
+
+    log.debug("Printing table info before update")
+    sqlh.print_all_table_information("users")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+
+    # cur.execute(
+    #     """
+    # CREATE TABLE IF NOT EXISTS users (
+    #     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    #     username TEXT NOT NULL,
+    #     mac_address TEXT,
+    #     ip_address TEXT,
+    #     daily_usage_bytes INTEGER NOT NULL DEFAULT 0,
+    #     monthly_usage_bytes INTEGER NOT NULL DEFAULT 0,
+    #     session_total_bytes INTEGER NOT NULL DEFAULT 0,
+    #     all_time_bytes INTEGER NOT NULL DEFAULT 0,
+    #     session_start_bytes NOT NULL DEFAULT 0,
+    #     logged_in INTEGER NOT NULL DEFAULT 0,
+    #     UNIQUE(username)
+    # );
+    # """
+    # )
+
+    cur.execute(
+        """
+        UPDATE users
+        SET daily_usage_bytes = daily_usage_bytes + ?,
+            monthly_usage_bytes = monthly_usage_bytes + ?,
+            all_time_bytes = all_time_bytes + ?,
+            session_total_bytes = session_total_bytes + ?
+        WHERE username = ?
+        """,
+        (
+            byte_delta,
+            byte_delta,
+            byte_delta,
+            byte_delta,
+            username,
+        ),
+    )
+
+    # Should really add error checking here...
+
+    con.commit()
+    con.close()
+
+    log.debug("Printing table info after update")
+    sqlh.print_all_table_information("users")
+
+
+def update_session_start_bytes(
+    username, user_bytes, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
+    # Raise error if user doens't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed updating session_start_bytes for user {username}: not found in users table."
+        )
+        raise UserNameError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
     cur = con.cursor()
 
     cur.execute(
         """
         UPDATE users
-        SET daily_usage_bytes = daily_usage_bytes + (? - session_total_bytes),
-            monthly_usage_bytes = monthly_usage_bytes + (? - session_total_bytes),
-            session_total_bytes = ?
+        SET session_start_bytes = ?
         WHERE username = ?
         """,
         (
             user_bytes,
-            user_bytes,
-            session_bytes,
+            username,
+        ),
+    )
+
+    # Should really add error checking here...
+
+    con.commit()
+    con.close()
+
+
+def wipe_session_total_bytes(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    log.debug(f"Wiping session total bytes for {username}...")
+
+    # Raise error if user doens't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed wiping session_total_bytes for user {username}: not found in users table."
+        )
+        raise UserNameError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+
+    cur.execute(
+        """
+        UPDATE users
+        SET session_total_bytes = ?
+        WHERE username = ?
+        """,
+        (
+            0,
             username,
         ),
     )
@@ -767,6 +870,46 @@ def fetch_high_speed_quota_for_user_usage(
         )
 
     return quota_bytes[0]
+
+
+def fetch_session_start_bytes(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    # Raise error if user doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching quota_bytes for user {username}: not found in users table."
+        )
+        raise UserNameError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    # Need to add try blocks and error catching for all of these things at some point.
+    try:
+        cur = con.cursor()
+
+        cur.execute(
+            """
+            SELECT session_start_bytes
+            FROM users
+            WHERE username = ?
+            """,
+            (username,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            log.error(
+                f"ERROR: Operation to fetch session_start_bytes failed for user {username}."
+            )
+            raise RuntimeError(
+                f"Failed to fetch session_start_bytes for user {username}."
+            )
+        session_start_bytes = row[0]
+        log.debug(f"Session_start_bytes: {session_start_bytes}")
+        return row[0]
+    finally:
+        con.close()
 
 
 def check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
