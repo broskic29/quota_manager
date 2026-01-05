@@ -1,5 +1,6 @@
 import logging
 import pickle
+import subprocess
 from python_arptable import get_arp_table
 from pathlib import Path
 
@@ -7,6 +8,9 @@ from quota_manager import sql_management as sqlm
 from quota_manager import nftables_management as nftm
 from quota_manager import sqlite_helper_functions as sqlh
 
+DNSMASQ_UNAUTH_FILE = "/tmp/dhcp_unauth.conf"
+DNSMASQ_AUTH_FILE = "/tmp/dhcp_auth.conf"
+DNSMASQ_LEASE_FILE = "/tmp/dhcp.leases"
 
 log = logging.getLogger(__name__)
 
@@ -249,6 +253,7 @@ def log_out_user(username, user_mac=None):
             log.info(
                 f"Successfully deleted user {username} MAC address ({user_mac}) from set"
             )
+            dnsmasq_modify_user(user_mac, "unauth")
 
     sqlm.logout_user_usage(username)
 
@@ -340,3 +345,44 @@ def initialize_nftables_sets():
                     key,
                     elem["elem"]["val"],
                 )
+
+
+def dnsmasq_modify_user(user_mac, operation):
+
+    if operation.lower() not in ["auth", "unauth"]:
+        raise RuntimeError(f"dnsmasq_modify_user: Operation {operation} invalid.")
+    
+    conf_remove_file = DNSMASQ_UNAUTH_FILE if "unauth" in operation.lower() else DNSMASQ_AUTH_FILE
+    conf_add_file = DNSMASQ_UNAUTH_FILE if "unauth" in operation.lower() else DNSMASQ_AUTH_FILE
+
+    dnsmasq_remove_from_file(conf_remove_file, user_mac)
+    dnsmasq_add_to_file(conf_add_file, user_mac, operation.lower())
+    dnsmasq_remove_lease(user_mac)
+    dnsmasq_hup()
+
+
+def dnsmasq_hup():
+    subprocess.run(["kill", "-HUP", "$(pidof dnsmasq)"], shell=True)
+
+
+def dnsmasq_remove_lease(user_mac):
+    LEASES = Path(DNSMASQ_LEASE_FILE)
+
+    lines = LEASES.read_text().splitlines()
+    lines = [l for l in lines if user_mac.lower() not in l.lower()]
+    LEASES.write_text("\n".join(lines) + "\n")
+
+
+def dnsmasq_remove_from_file(filename, user_mac):
+    TAGS = Path(filename)
+
+    lines = TAGS.read_text().splitlines()
+    lines = [l for l in lines if user_mac.lower() not in l.lower()]
+    TAGS.write_text("\n".join(lines) + "\n")
+
+
+def dnsmasq_add_to_file(filename, user_mac, operation):
+    TAGS = Path(filename)
+
+    with(TAGS, "a") as file:
+        file.write(f"dhcp-host={user_mac.upper()},set:{operation}")

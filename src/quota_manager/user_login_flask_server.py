@@ -118,6 +118,17 @@ def login():
                 return render_template_string(login_form, error=error)
 
             _, error = flu.safe_call(
+                qm.dnsmasq_modify_user,
+                error,
+                USER_LOGIN_ERROR_MESSAGES,
+                user_mac,
+                "auth",
+            )
+
+            if error:
+                return render_template_string(login_form, error=error)
+
+            _, error = flu.safe_call(
                 qm.mac_update,
                 error,
                 USER_LOGIN_ERROR_MESSAGES,
