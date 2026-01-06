@@ -9,6 +9,12 @@ DEFAULT_SCHEMA_PATH = "/etc/freeradius3/mods-config/sql/main/sqlite/schema.sql"
 log = logging.getLogger(__name__)
 
 
+class MACAddressError(Exception):
+    """Raised when a user does not exist."""
+
+    pass
+
+
 def check_if_table_exists(table_name, db_path=RADIUS_DB_PATH):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()

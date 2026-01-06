@@ -9,7 +9,6 @@ import quota_manager.quota_management as qm
 
 ACCOUNT_BILLING_DAY = 7
 UPDATE_INTERVAL = 10
-UTC_OFFSET = 2
 ONE_DAY = 1
 ONE_MONTH = 1
 
@@ -43,7 +42,7 @@ def monthly_delay_calc(now, tz):
 
 def wipe_scheduler(stop_event: threading.Event):
     while not stop_event.is_set():
-        tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
+        tz = dt.timezone(dt.timedelta(hours=qm.UTC_OFFSET))
         now = dt.datetime.now(tz)
 
         daily_delay = daily_delay_calc(now, tz)

@@ -69,9 +69,6 @@ class QuotaManagerApp:
             threading.Thread(
                 target=arp_table_timeout_tracking, args=(self.stop_event,), daemon=True
             ),
-            threading.Thread(
-                target=arp_timeout_enforcer, args=(self.stop_event,), daemon=True
-            ),
         ]
 
         self.threads.extend(self.arp_threads)

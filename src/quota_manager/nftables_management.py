@@ -2,6 +2,8 @@ import nftables
 import json
 import logging
 
+import sqlite_helper_functions as sqhl
+
 # Need to figure out what default will be here. Use captive table, or modify fw4 table?
 TABLE_FAMILY = "inet"
 CAPTIVE_TABLE_NAME = "fw4"
@@ -15,12 +17,6 @@ log = logging.getLogger(__name__)
 
 class NFTSetMissingElementError(Exception):
     """Raised when an nftables set is missing an element it really should have."""
-
-    pass
-
-
-class MACAddressError(Exception):
-    """Raised when a user does not exist."""
 
     pass
 
@@ -78,7 +74,7 @@ def get_bytes_from_user(user_mac):
         log.error(
             f"ERROR: Operation to fetch usage failed for user {user_mac}: MAC address not in set."
         )
-        raise MACAddressError(f"Usage bytes undefined for user {user_mac}")
+        raise sqlh.MACAddressError(f"Usage bytes undefined for user {user_mac}")
 
     return user_bytes[0]
 

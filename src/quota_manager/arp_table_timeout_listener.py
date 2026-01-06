@@ -3,7 +3,6 @@ import threading
 from queue import Queue, Empty
 from time import sleep
 from python_arptable import get_arp_table
-import datetime as dt
 
 from quota_manager import quota_management as qm
 
@@ -31,23 +30,9 @@ def arp_table_timeout_tracking(stop_event: threading.Event):
 
         try:
             mac_address = entry["HW address"]
-
-            tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
-            timestamp = dt.datetime.now(tz)
-
-            qm.update_arp_timeout_db(mac_address, timestamp)
+            qm.arp_timeout_enforcer(mac_address)
 
         except Exception as e:
             log.error(
                 f"Unexpected error updating arp timeout database for {entry}: {e}."
             )
-
-
-def arp_timeout_enforcer(stop_event: threading.Event):
-    while not stop_event.is_set():
-        try:
-            timeout_dict = qm.get_timed_out_users()
-            qm.enforce_timeouts(timeout_dict)
-        except Exception as e:
-            log.error(f"Unexpected error enforcing arp table timeouts: {e}.")
-        stop_event.wait(POLLING_INTERVAL)

@@ -11,6 +11,11 @@ log = logging.getLogger(__name__)
 LOGGED_OUT = 0
 LOGGED_IN = 1
 
+NOT_TIMED_OUT = 0
+TIMED_OUT = 1
+
+UTC_OFFSET = 2
+
 
 class UserNameError(Exception):
     """Raised when a username query returns nothing."""
@@ -123,6 +128,7 @@ def init_usage_db():
             mac_address TEXT NOT NULL,
             last_timestamp INTEGER,
             timeout INTEGER DEFAULT 0
+            UNIQUE(mac_address)
         );
         """
         )
@@ -1019,3 +1025,81 @@ def check_if_user_logged_in(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
     logged_in = res[0]
     return bool(logged_in)
+
+
+def insert_mac_arp_db(user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+    INSERT INTO arp_timeouts (mac_address, last_timestamp, timeout)
+    VALUES (?, ?, ?)
+    """,
+        (
+            user_mac,
+            now,
+            0,
+        ),
+    )
+    con.commit()
+    con.close()
+
+
+def select_arp_row(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT *
+        FROM arp_timeouts
+        WHERE mac_address = ?
+        """,
+        (mac_address,),
+    )
+    row = cur.fetchone()
+    con.close()
+    return row
+
+
+def update_mac_arp_db(user_mac, now, timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    row = select_arp_row(user_mac)
+
+    if row:
+        columns = [column for column in sqlh.fetch_all_columns("arp_timeouts", db_path)]
+        set_clause = ", ".join(f"{col} = ?" for col in columns)
+        values = list(row)
+        values[2] = now
+        values[3] = timeout
+
+        con = sqlite3.connect(
+            db_path, timeout=30, isolation_level=None
+        )  # Connects to database
+        cur = con.cursor()
+        cur.execute(
+            f"""
+            UPDATE users
+            SET {set_clause}
+            WHERE mac_address = ?
+            """,
+            values + [user_mac],
+        )
+        con.commit()
+        con.close()
+    else:
+        raise sqlh.MACAddressError(
+            f"Failed attempting to update arptable for MAC address {user_mac}: Device does not exist."
+        )
+
+
+def delete_arp_mac(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute("DELETE FROM arp_timeouts WHERE mac_address = ?", (mac_address,))
+    con.commit()
+    con.close()

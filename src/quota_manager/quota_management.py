@@ -2,6 +2,7 @@ import logging
 import pickle
 from python_arptable import get_arp_table
 from pathlib import Path
+import datetime as dt
 
 from quota_manager import sql_management as sqlm
 from quota_manager import nftables_management as nftm
@@ -9,6 +10,9 @@ from quota_manager import sqlite_helper_functions as sqlh
 
 
 log = logging.getLogger(__name__)
+
+UTC_OFFSET = 2
+ARP_TIMEOUT = 30
 
 
 def mac_from_ip(ip):
@@ -341,8 +345,38 @@ def initialize_nftables_sets():
                     elem["elem"]["val"],
                 )
 
-def update_arp_timeout_db(mac_address, timestamp):
 
-def get_timed_out_users():
+def arp_timeout_enforcer(mac_address):
+    tz = dt.timezone(dt.timedelta(hours=sqlh.UTC_OFFSET))
+    now = dt.datetime.now(tz)
 
-def enforce_timeouts(timeout_dict):
+    row = sqlm.select_arp_row(mac_address)
+
+    if row:
+
+        last_timestamp = row[2]
+        timeout = row[3]
+
+        timeout = 0
+        if timeout or (now - last_timestamp) > ARP_TIMEOUT:
+
+            try:
+                arp_enforce_timeout(mac_address)
+            except:
+                sqlm.update_mac_arp_db(mac_address, now, timeout)
+                return None
+
+            sqlm.delete_arp_mac(mac_address)
+
+        sqlm.update_mac_arp_db(mac_address, now, timeout)
+
+    else:
+        sqlm.insert_mac_arp_db(mac_address, now)
+
+
+def arp_enforce_timeout(mac_address):
+    # Have to change dnsmasq tag. Need to assign one on user login as well
+    # Test this stuff first to make sure it works. Test dnsmasq tagging as well.
+    # Then merge dnsmasq tagging into develop, then merge develop into this branch.
+    # Then add enforcement, then merge back.
+    pass
