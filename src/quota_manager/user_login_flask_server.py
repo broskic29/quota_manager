@@ -48,7 +48,20 @@ def login():
         if error:
             return render_template_string(login_form, error=error)
 
-        if flu.authenticate_radius(username, password, user_ip, user_mac):
+        rad_auth, error = flu.safe_call(
+            flu.authenticate_radius,
+            error,
+            USER_LOGIN_ERROR_MESSAGES,
+            username,
+            password,
+            user_ip,
+            user_mac,
+        )
+
+        if error:
+            return render_template_string(login_form, error=error)
+
+        if rad_auth:
 
             old_user_mac = None
 
@@ -60,19 +73,16 @@ def login():
             if error:
                 return render_template_string(login_form, error=error)
 
-            old_username_for_mac_addresse, _ = flu.safe_call(
+            old_username_for_mac_address, _ = flu.safe_call(
                 qm.check_which_user_logged_in_for_mac_address,
                 error,
                 USER_LOGIN_ERROR_MESSAGES,
                 user_mac,
             )
 
-            if error:
-                return render_template_string(login_form, error=error)
-
             session_start_bytes = 0
 
-            if old_username_for_mac_addresse:
+            if old_username_for_mac_address:
 
                 session_start_bytes, error = flu.safe_call(
                     qm.initialize_session_start_bytes,
@@ -88,7 +98,7 @@ def login():
                     qm.log_out_user,
                     error,
                     USER_LOGIN_ERROR_MESSAGES,
-                    old_username_for_mac_addresse,
+                    old_username_for_mac_address,
                 )
 
                 if error:
