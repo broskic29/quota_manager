@@ -64,9 +64,8 @@ def wipe_scheduler():
         sqlm.usage_daily_wipe()
         log.info("Daily wipe complete.")
 
-        qm.reset_throttling()
-        log.info("Throttling reset.")
-        # Add another function call: _reset_user_packet_dropping()
+        qm.reset_throttling_and_packet_dropping()
+        log.info("Throttling and packet dropping reset.")
 
 
 def usage_updater():
@@ -78,7 +77,7 @@ def usage_updater():
         log.debug(usage_dict)
 
         log.debug("Enforcing quotas...")
-        quota_dict = qm.enforce_quotas_all_users()
+        quota_dict = qm.enforce_quotas_all_users(throttling=False)
         log.debug(quota_dict)
 
         log.debug("Updating persistent nft sets...")

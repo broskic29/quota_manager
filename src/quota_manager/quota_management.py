@@ -31,7 +31,7 @@ def is_user_authenticated(username, user_mac):
     )
     try:
         mac_in_set = nftm.check_if_elem_in_set(
-            user_mac, nftm.TABLE_FAMILY, nftm.CAPTIVE_TABLE_NAME, nftm.AUTH_SET_NAME
+            user_mac, nftm.TABLE_FAMILY, nftm.TABLE_NAME, nftm.AUTH_SET_NAME
         )
     except KeyError:
         log.debug(f"MAC address {user_mac} not in nft set.")
@@ -106,9 +106,9 @@ def update_all_users_bytes(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return usage_dict
 
 
-def reset_throttling(db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def reset_throttling_and_packet_dropping(db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
-    nftm.flush_set(nftm.TABLE_FAMILY, nftm.THROTTLE_TABLE_NAME, nftm.THROTTLE_SET_NAME)
+    nftm.flush_set(nftm.TABLE_FAMILY, nftm.TABLE_NAME, nftm.THROTTLE_SET_NAME)
 
     usernames = sqlm.fetch_all_usernames_usage(db_path)
 
@@ -126,15 +126,31 @@ def reset_throttling(db_path=sqlh.USAGE_TRACKING_DB_PATH):
             raise KeyError(f"No MAC address found for user {username}")
 
         nftm.operation_on_set_element(
+            "delete",
+            nftm.TABLE_FAMILY,
+            nftm.TABLE_NAME,
+            nftm.THROTTLE_SET_NAME,
+            mac_address,
+        )
+
+        nftm.operation_on_set_element(
             "add",
             nftm.TABLE_FAMILY,
-            nftm.THROTTLE_TABLE_NAME,
+            nftm.TABLE_NAME,
             nftm.HIGH_SPEED_SET_NAME,
             mac_address,
         )
 
+        nftm.operation_on_set_element(
+            "delete",
+            nftm.TABLE_FAMILY,
+            nftm.TABLE_NAME,
+            nftm.DROP_SET_NAME,
+            mac_address,
+        )
 
-def enforce_quotas_all_users(db_path=sqlh.USAGE_TRACKING_DB_PATH):
+
+def enforce_quotas_all_users(throttling: bool, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
     quota_dict = {"under_quota": [], "over_quota": []}
 
@@ -157,20 +173,30 @@ def enforce_quotas_all_users(db_path=sqlh.USAGE_TRACKING_DB_PATH):
                 )
                 raise KeyError(f"No MAC address found for user {username}")
             # Add error catching here
-            nftm.operation_on_set_element(
-                "add",
-                nftm.TABLE_FAMILY,
-                nftm.THROTTLE_TABLE_NAME,
-                nftm.THROTTLE_SET_NAME,
-                mac_address,
-            )
-            nftm.operation_on_set_element(
-                "delete",
-                nftm.TABLE_FAMILY,
-                nftm.THROTTLE_TABLE_NAME,
-                nftm.HIGH_SPEED_SET_NAME,
-                mac_address,
-            )
+
+            if throttling:
+                nftm.operation_on_set_element(
+                    "add",
+                    nftm.TABLE_FAMILY,
+                    nftm.TABLE_NAME,
+                    nftm.THROTTLE_SET_NAME,
+                    mac_address,
+                )
+                nftm.operation_on_set_element(
+                    "delete",
+                    nftm.TABLE_FAMILY,
+                    nftm.TABLE_NAME,
+                    nftm.HIGH_SPEED_SET_NAME,
+                    mac_address,
+                )
+            else:
+                nftm.operation_on_set_element(
+                    "delete",
+                    nftm.TABLE_FAMILY,
+                    nftm.TABLE_NAME,
+                    nftm.DROP_SET_NAME,
+                    mac_address,
+                )
         else:
             if username not in quota_dict["under_quota"]:
                 quota_dict["under_quota"].append(username)
@@ -182,7 +208,7 @@ def add_mac_to_set(user_mac):
     nftm.operation_on_set_element(
         "add",
         nftm.TABLE_FAMILY,
-        nftm.CAPTIVE_TABLE_NAME,
+        nftm.TABLE_NAME,
         nftm.AUTH_SET_NAME,
         user_mac,
     )
@@ -192,7 +218,7 @@ def delete_mac_from_set(user_mac):
     nftm.operation_on_set_element(
         "delete",
         nftm.TABLE_FAMILY,
-        nftm.CAPTIVE_TABLE_NAME,
+        nftm.TABLE_NAME,
         nftm.AUTH_SET_NAME,
         user_mac,
     )
@@ -282,7 +308,7 @@ def mac_update(old_mac, new_mac):
         nftm.operation_on_set_element(
             "delete",
             nftm.TABLE_FAMILY,
-            nftm.CAPTIVE_TABLE_NAME,
+            nftm.TABLE_NAME,
             nftm.AUTH_SET_NAME,
             old_mac,
         )
@@ -291,7 +317,7 @@ def mac_update(old_mac, new_mac):
     nftm.operation_on_set_element(
         "add",
         nftm.TABLE_FAMILY,
-        nftm.CAPTIVE_TABLE_NAME,
+        nftm.TABLE_NAME,
         nftm.AUTH_SET_NAME,
         new_mac,
     )
@@ -314,9 +340,7 @@ def check_which_user_logged_in_for_mac_address(mac_address):
 
 
 def ensure_set_persistence():
-    elem_dict = nftm.pull_elements_from_custom_sets(
-        nftm.TABLE_FAMILY, nftm.CAPTIVE_TABLE_NAME
-    )
+    elem_dict = nftm.pull_elements_from_custom_sets(nftm.TABLE_FAMILY, nftm.TABLE_NAME)
     p = Path(sqlh.USAGE_TRACKING_DB_PATH).parent / "nft_persistence.pkl"
     with open(p, "wb") as file:
         pickle.dump(elem_dict, file)
@@ -336,7 +360,7 @@ def initialize_nftables_sets():
                 nftm.operation_on_set_element(
                     "add",
                     nftm.TABLE_FAMILY,
-                    nftm.CAPTIVE_TABLE_NAME,
+                    nftm.TABLE_NAME,
                     key,
                     elem["elem"]["val"],
                 )
