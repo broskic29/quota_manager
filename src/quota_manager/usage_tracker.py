@@ -95,8 +95,5 @@ def start_usage_tracking(stop_event: threading.Event):
         target=usage_updater, args=(stop_event,), daemon=True
     )
 
-    t_wipe_scheduler.start()
-    t_usage_updater.start()
-
     log.info("Usage tracking threads started")
     return [t_wipe_scheduler, t_usage_updater]

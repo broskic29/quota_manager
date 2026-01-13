@@ -8,6 +8,14 @@ import quota_manager.sqlite_helper_functions as sqlh
 
 log = logging.getLogger(__name__)
 
+ARP_TIMEOUT_TABLE_NAME = "arp_timeouts"
+USAGE_TRACKING_TABLE_NAME = "users"
+GROUP_TABLE_NAME = "groups"
+GROUP_USERS_TABLE_NAME = "group_users"
+RADIUS_TABLE_NAME = "radcheck"
+
+ARP_TIMEOUT = 30
+
 LOGGED_OUT = 0
 LOGGED_IN = 1
 
@@ -47,7 +55,7 @@ def init_freeradius_db():
     p.parent.mkdir(parents=True, exist_ok=True)
 
     if not p.exists() or not sqlh.check_if_table_exists(
-        "radcheck", sqlh.RADIUS_DB_PATH
+        RADIUS_TABLE_NAME, sqlh.RADIUS_DB_PATH
     ):
         log.debug("RADIUS database doesn't exist!")
         try:
@@ -59,6 +67,9 @@ def init_freeradius_db():
 
 # --- Database setup ---
 def init_usage_db():
+
+    log.info("Initializing usage database...")
+
     p = Path(sqlh.USAGE_TRACKING_DB_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)
 
@@ -91,6 +102,8 @@ def init_usage_db():
         """
         )
 
+        log.info("sql_managements: Created table 'users'.")
+
         cur.execute(
             """
         CREATE TABLE IF NOT EXISTS groups (
@@ -102,6 +115,8 @@ def init_usage_db():
         );
         """
         )
+
+        log.info("sql_managements: Created table 'groups'.")
 
         cur.execute(
             """
@@ -121,17 +136,22 @@ def init_usage_db():
         """
         )
 
+        log.info("sql_managements: Created table 'group_users'.")
+
         cur.execute(
-            """
+            f"""
         CREATE TABLE IF NOT EXISTS arp_timeouts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             mac_address TEXT NOT NULL,
             last_timestamp INTEGER,
-            timeout INTEGER DEFAULT 0
+            timeout INTEGER DEFAULT 0,
+            time_left_before_timeout INTEGER DEFAULT {ARP_TIMEOUT},
             UNIQUE(mac_address)
         );
         """
         )
+
+        log.info("sql_managements: Created table 'arp_timeouts'.")
 
         con.commit()
         con.close()
@@ -146,7 +166,7 @@ def insert_user_radius(
     db_path=sqlh.RADIUS_DB_PATH,
 ):
     table_exists = sqlh.check_if_table_exists(
-        table_name="radcheck", db_path=sqlh.RADIUS_DB_PATH
+        table_name=RADIUS_TABLE_NAME, db_path=sqlh.RADIUS_DB_PATH
     )
 
     if not table_exists:
@@ -154,7 +174,7 @@ def insert_user_radius(
         init_freeradius_db()
 
     user_exists = check_if_user_exists(
-        username, table_name="radcheck", db_path=sqlh.RADIUS_DB_PATH
+        username, table_name=RADIUS_TABLE_NAME, db_path=sqlh.RADIUS_DB_PATH
     )
 
     if not user_exists:
@@ -436,7 +456,10 @@ def login_user_usage(
 
     # Carries over daily bytes and whatnot. Need to test...
     if row:
-        columns = [column for column in sqlh.fetch_all_columns("users", db_path)]
+        columns = [
+            column
+            for column in sqlh.fetch_all_columns(USAGE_TRACKING_TABLE_NAME, db_path)
+        ]
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
         log.debug(f"Values for user {username}: {values}")
@@ -460,7 +483,9 @@ def login_user_usage(
         )
 
         log.info(f"User {username} successfully updated.")
-        sqlh.print_all_table_information("users", db_path=sqlh.USAGE_TRACKING_DB_PATH)
+        sqlh.print_all_table_information(
+            USAGE_TRACKING_TABLE_NAME, db_path=sqlh.USAGE_TRACKING_DB_PATH
+        )
 
         con.commit()
         con.close()
@@ -478,7 +503,10 @@ def logout_user_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
     # Carries over daily bytes and whatnot. Need to test...
     if row:
-        columns = [column for column in sqlh.fetch_all_columns("users", db_path)]
+        columns = [
+            column
+            for column in sqlh.fetch_all_columns(USAGE_TRACKING_TABLE_NAME, db_path)
+        ]
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
         values[9] = LOGGED_OUT
@@ -576,9 +604,21 @@ def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
     cur.execute(
-        """
+        f"""
         SELECT username
-        FROM users
+        FROM {USAGE_TRACKING_TABLE_NAME}
+        """,
+    )
+    return [entry[0] for entry in cur.fetchall()]
+
+
+def fetch_all_macs_arp_timeouts(db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cur = con.cursor()
+    cur.execute(
+        f"""
+        SELECT mac_address
+        FROM {ARP_TIMEOUT_TABLE_NAME}
         """,
     )
     return [entry[0] for entry in cur.fetchall()]
@@ -639,7 +679,7 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
         raise UserNameError(f"User {username} does not exist.")
 
     log.debug("Printing table info before update")
-    sqlh.print_all_table_information("users")
+    sqlh.print_all_table_information(USAGE_TRACKING_TABLE_NAME)
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -688,7 +728,7 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
     con.close()
 
     log.debug("Printing table info after update")
-    sqlh.print_all_table_information("users")
+    sqlh.print_all_table_information(USAGE_TRACKING_TABLE_NAME)
 
 
 def update_session_start_bytes(
@@ -849,7 +889,7 @@ def fetch_high_speed_quota_for_user_usage(
         )
         raise GroupMemberError(f"User {username} not assigned to a group.")
 
-    table_empty = sqlh.check_if_table_empty("groups", db_path)
+    table_empty = sqlh.check_if_table_empty(GROUP_TABLE_NAME, db_path)
 
     if table_empty:
         log.error(f"Failed fetching quota_bytes for user {username}: no groups exist.")
@@ -964,7 +1004,7 @@ def check_if_user_in_any_group(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
 
 def check_if_user_exists(
-    username, table_name="users", db_path=sqlh.USAGE_TRACKING_DB_PATH
+    username, table_name=USAGE_TRACKING_TABLE_NAME, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -977,6 +1017,26 @@ def check_if_user_exists(
         WHERE username = ?
         """,
         (username,),
+    )
+    res = cur.fetchall()
+    con.close()
+    if len(res) < 1:
+        return False
+    return True
+
+
+def check_if_value_in_table(value, value_type, table_name, db_path):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        f"""
+        SELECT {value_type}
+        FROM {table_name}
+        WHERE {value_type} = ?
+        """,
+        (value,),
     )
     res = cur.fetchall()
     con.close()
@@ -1046,6 +1106,8 @@ def insert_mac_arp_db(user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con.commit()
     con.close()
 
+    log.info(f"Inserted user at {user_mac} into arp_timeouts table.")
+
 
 def select_arp_row(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
@@ -1065,7 +1127,9 @@ def select_arp_row(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return row
 
 
-def update_mac_arp_db(user_mac, now, timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def update_mac_arp_db(
+    user_mac, now, time_left_before_timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
     row = select_arp_row(user_mac)
 
     if row:
@@ -1073,7 +1137,7 @@ def update_mac_arp_db(user_mac, now, timeout, db_path=sqlh.USAGE_TRACKING_DB_PAT
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
         values[2] = now
-        values[3] = timeout
+        values[4] = time_left_before_timeout
 
         con = sqlite3.connect(
             db_path, timeout=30, isolation_level=None
@@ -1081,7 +1145,7 @@ def update_mac_arp_db(user_mac, now, timeout, db_path=sqlh.USAGE_TRACKING_DB_PAT
         cur = con.cursor()
         cur.execute(
             f"""
-            UPDATE users
+            UPDATE arp_timeouts
             SET {set_clause}
             WHERE mac_address = ?
             """,
@@ -1089,6 +1153,7 @@ def update_mac_arp_db(user_mac, now, timeout, db_path=sqlh.USAGE_TRACKING_DB_PAT
         )
         con.commit()
         con.close()
+        log.debug(f"Updated arp_timeouts table for user at {user_mac}.")
     else:
         raise sqlh.MACAddressError(
             f"Failed attempting to update arptable for MAC address {user_mac}: Device does not exist."
@@ -1103,3 +1168,4 @@ def delete_arp_mac(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     cur.execute("DELETE FROM arp_timeouts WHERE mac_address = ?", (mac_address,))
     con.commit()
     con.close()
+    log.debug(f"Deleted {mac_address} from arp_timeouts table.")

@@ -84,7 +84,7 @@ def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
     res = cur.execute("SELECT username, attribute, value FROM radcheck;")
     rows = res.fetchall()
     for row in rows:
-        print(row)
+        log.debug(row)
 
 
 def print_all_radius_accounting_information(db_path=RADIUS_DB_PATH):
@@ -95,7 +95,7 @@ def print_all_radius_accounting_information(db_path=RADIUS_DB_PATH):
     res = cur.execute("SELECT username, attribute, value FROM radacct;")
     rows = res.fetchall()
     for row in rows:
-        print(row)
+        log.debug(row)
 
 
 def print_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
@@ -106,4 +106,4 @@ def print_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
     res = cur.execute(f"SELECT * FROM {table};")
     rows = res.fetchall()
     for row in rows:
-        print(row)
+        log.debug(row)

@@ -13,7 +13,6 @@ from quota_manager.admin_management_flask_server import admin_management_app
 from quota_manager.arp_table_timeout_listener import (
     arp_table_poller,
     arp_table_timeout_tracking,
-    arp_timeout_enforcer,
 )
 
 
@@ -22,7 +21,7 @@ log = logging.getLogger(__name__)
 
 class QuotaManagerApp:
     def __init__(self):
-        self.stop_event = threading.Event
+        self.stop_event = threading.Event()
         self.event_queue = Queue()
         self.threads: list[threading.Thread] = []
 
@@ -44,7 +43,7 @@ class QuotaManagerApp:
             log.info("Keyboard interrupt received, shutting down...")
             self.stop()
 
-    def _run_flask_servers(self):
+    def _start_flask_servers(self):
         log.info("Starting login page")
         login_thread = threading.Thread(
             target=lambda: serve(user_login_app, host="0.0.0.0", port=5000),

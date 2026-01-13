@@ -2,7 +2,7 @@ import nftables
 import json
 import logging
 
-import sqlite_helper_functions as sqhl
+from quota_manager import sqlite_helper_functions as sqlh
 
 # Need to figure out what default will be here. Use captive table, or modify fw4 table?
 TABLE_FAMILY = "inet"
