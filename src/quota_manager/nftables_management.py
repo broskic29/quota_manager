@@ -4,11 +4,11 @@ import logging
 
 # Need to figure out what default will be here. Use captive table, or modify fw4 table?
 TABLE_FAMILY = "inet"
-CAPTIVE_TABLE_NAME = "fw4"
-THROTTLE_TABLE_NAME = "fw4"
+TABLE_NAME = "fw4"
 AUTH_SET_NAME = "authorized_users"
 THROTTLE_SET_NAME = "throttled_users"
 HIGH_SPEED_SET_NAME = "high_speed_users"
+DROP_SET_NAME = "dropped_users"
 
 log = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ def operation_on_set_element(operation, table_family, table_name, set_name, elem
 def get_bytes_from_user(user_mac):
     nft = nftables.Nftables()
     nft.set_json_output(True)
-    rc, output, error = nft.cmd(
-        f"list set {TABLE_FAMILY} {CAPTIVE_TABLE_NAME} {AUTH_SET_NAME}"
-    )
+    rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
     sets = json.loads(output)["nftables"]
 
     elements = sets[1]["set"]
@@ -86,9 +84,7 @@ def get_bytes_from_user(user_mac):
 def get_bytes_from_all_users():
     nft = nftables.Nftables()
     nft.set_json_output(True)
-    rc, output, error = nft.cmd(
-        f"list set {TABLE_FAMILY} {CAPTIVE_TABLE_NAME} {AUTH_SET_NAME}"
-    )
+    rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
     sets = json.loads(output)["nftables"]
     elements = sets[1]["set"]["elem"]
     counter_dict = {
@@ -142,11 +138,17 @@ def check_if_elem_in_set(test_elem, table_family, table_name, set_name):
 
     rc, out, err = nft.json_cmd(set_payload)
 
-    elements = out["nftables"][1]["set"]["elem"]
+    try:
+        elements = out["nftables"][1]["set"]["elem"]
 
-    res = [elem["elem"]["val"] for elem in elements if test_elem in elem["elem"]["val"]]
+        res = [
+            elem["elem"]["val"] for elem in elements if test_elem in elem["elem"]["val"]
+        ]
 
-    return bool(res)
+        return bool(res)
+    except (KeyError, TypeError):
+        log.info(f"Element {test_elem} not in set {set_name}.")
+        return False
 
 
 def pull_elements_from_custom_sets(table_family, table_name):

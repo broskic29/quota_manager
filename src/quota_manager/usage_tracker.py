@@ -70,6 +70,9 @@ def wipe_scheduler():
 
 
 def usage_updater():
+
+    quota_dict = {}
+
     while True:
         sleep(UPDATE_INTERVAL)
 
@@ -78,7 +81,7 @@ def usage_updater():
         log.debug(usage_dict)
 
         log.debug("Enforcing quotas...")
-        quota_dict = qm.enforce_quotas_all_users()
+        quota_dict = qm.enforce_quotas_all_users(quota_dict, throttling=False)
         log.debug(quota_dict)
 
         log.debug("Updating persistent nft sets...")
