@@ -1,4 +1,3 @@
-import asyncio
 import threading
 import logging
 from waitress import serve
@@ -10,11 +9,11 @@ from quota_manager.sql_management import init_freeradius_db, init_usage_db
 from .quota_management import initialize_nftables_sets
 from quota_manager.user_login_flask_server import user_login_app
 from quota_manager.admin_management_flask_server import admin_management_app
-from quota_manager.arp_table_timeout_listener import (
-    arp_table_poller,
-    arp_table_timeout_tracking,
+from quota_manager.ip_neigh_timeout_listener import (
+    ip_neigh_poller,
+    ip_neigh_timeout_tracking,
+    ip_neigh_enforcer,
 )
-
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class QuotaManagerApp:
 
         self._start_flask_servers()
         self._start_usage_tracking()
-        self._start_arp_threads()
+        self._start_ip_neigh_threads()
 
         try:
             while not self.stop_event.is_set():
@@ -60,13 +59,16 @@ class QuotaManagerApp:
         admin_thread.start()
         log.info("Flask servers started on ports 5000 and 5001")
 
-    def _start_arp_threads(self):
+    def _start_ip_neigh_threads(self):
         self.arp_threads = [
             threading.Thread(
-                target=arp_table_poller, args=(self.stop_event,), daemon=True
+                target=ip_neigh_poller, args=(self.stop_event,), daemon=True
             ),
             threading.Thread(
-                target=arp_table_timeout_tracking, args=(self.stop_event,), daemon=True
+                target=ip_neigh_timeout_tracking, args=(self.stop_event,), daemon=True
+            ),
+            threading.Thread(
+                target=ip_neigh_enforcer, args=(self.stop_event,), daemon=True
             ),
         ]
 
@@ -74,7 +76,7 @@ class QuotaManagerApp:
 
         for t in self.arp_threads:
             t.start()
-        log.info("Started ARP threads...")
+        log.info("Started IP neigh tracking threads...")
 
     def _start_usage_tracking(self):
         usage_tracking_threads = start_usage_tracking(self.stop_event)

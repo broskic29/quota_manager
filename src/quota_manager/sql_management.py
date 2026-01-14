@@ -8,21 +8,16 @@ import quota_manager.sqlite_helper_functions as sqlh
 
 log = logging.getLogger(__name__)
 
-ARP_TIMEOUT_TABLE_NAME = "arp_timeouts"
+IP_TIMEOUT_TABLE_NAME = "ip_timeouts"
 USAGE_TRACKING_TABLE_NAME = "users"
 GROUP_TABLE_NAME = "groups"
 GROUP_USERS_TABLE_NAME = "group_users"
 RADIUS_TABLE_NAME = "radcheck"
 
-ARP_TIMEOUT = 30
+IP_TIMEOUT = 10
 
 LOGGED_OUT = 0
 LOGGED_IN = 1
-
-NOT_TIMED_OUT = 0
-TIMED_OUT = 1
-
-UTC_OFFSET = 2
 
 
 class UserNameError(Exception):
@@ -84,6 +79,11 @@ def init_usage_db():
         con = sqlite3.connect(sqlh.USAGE_TRACKING_DB_PATH)
         cur = con.cursor()
 
+        if not sqlh.check_if_table_exists(
+            USAGE_TRACKING_TABLE_NAME, sqlh.USAGE_TRACKING_DB_PATH
+        ):
+            log.info(f"sql_management: Creating table '{USAGE_TRACKING_TABLE_NAME}'.")
+
         cur.execute(
             """
         CREATE TABLE IF NOT EXISTS users (
@@ -102,7 +102,10 @@ def init_usage_db():
         """
         )
 
-        log.info("sql_managements: Created table 'users'.")
+        if not sqlh.check_if_table_exists(
+            GROUP_TABLE_NAME, sqlh.USAGE_TRACKING_DB_PATH
+        ):
+            log.info(f"sql_management: Creating table '{GROUP_TABLE_NAME}'.")
 
         cur.execute(
             """
@@ -116,7 +119,10 @@ def init_usage_db():
         """
         )
 
-        log.info("sql_managements: Created table 'groups'.")
+        if not sqlh.check_if_table_exists(
+            GROUP_USERS_TABLE_NAME, sqlh.USAGE_TRACKING_DB_PATH
+        ):
+            log.info(f"sql_management: Creating table '{GROUP_USERS_TABLE_NAME}'.")
 
         cur.execute(
             """
@@ -136,22 +142,24 @@ def init_usage_db():
         """
         )
 
-        log.info("sql_managements: Created table 'group_users'.")
+        if not sqlh.check_if_table_exists(
+            IP_TIMEOUT_TABLE_NAME, sqlh.USAGE_TRACKING_DB_PATH
+        ):
+            log.info(f"sql_management: Creating table '{IP_TIMEOUT_TABLE_NAME}'.")
 
         cur.execute(
             f"""
-        CREATE TABLE IF NOT EXISTS arp_timeouts (
+        CREATE TABLE IF NOT EXISTS ip_timeouts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mac_address TEXT NOT NULL,
+            ip_addr TEXT NOT NULL,
+            mac_addr TEXT NOT NULL,
             last_timestamp INTEGER,
             timeout INTEGER DEFAULT 0,
-            time_left_before_timeout INTEGER DEFAULT {ARP_TIMEOUT},
-            UNIQUE(mac_address)
+            time_left_before_timeout INTEGER DEFAULT {IP_TIMEOUT},
+            UNIQUE(ip_addr)
         );
         """
         )
-
-        log.info("sql_managements: Created table 'arp_timeouts'.")
 
         con.commit()
         con.close()
@@ -483,7 +491,7 @@ def login_user_usage(
         )
 
         log.info(f"User {username} successfully updated.")
-        sqlh.print_all_table_information(
+        sqlh.log_all_table_information(
             USAGE_TRACKING_TABLE_NAME, db_path=sqlh.USAGE_TRACKING_DB_PATH
         )
 
@@ -600,6 +608,27 @@ def get_usernames_from_mac_address_usage(
     return [entry[0] for entry in res]
 
 
+def get_usernames_from_ip_address_usage(
+    ip_address, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cur = con.cursor()
+
+    cur.execute(
+        """
+        SELECT username
+        FROM users
+        WHERE ip_address = ?
+        """,
+        (ip_address,),
+    )
+    res = cur.fetchall()
+    if len(res) < 1:
+        log.debug(f"No usernames can be found for IP address: {ip_address}")
+        return None
+    return [entry[0] for entry in res]
+
+
 def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
@@ -612,13 +641,13 @@ def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return [entry[0] for entry in cur.fetchall()]
 
 
-def fetch_all_macs_arp_timeouts(db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def fetch_all_ip_addr_ip_timeouts(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
     cur.execute(
         f"""
-        SELECT mac_address
-        FROM {ARP_TIMEOUT_TABLE_NAME}
+        SELECT ip_addr
+        FROM {IP_TIMEOUT_TABLE_NAME}
         """,
     )
     return [entry[0] for entry in cur.fetchall()]
@@ -679,7 +708,7 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
         raise UserNameError(f"User {username} does not exist.")
 
     log.debug("Printing table info before update")
-    sqlh.print_all_table_information(USAGE_TRACKING_TABLE_NAME)
+    sqlh.log_all_table_information(USAGE_TRACKING_TABLE_NAME)
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -728,7 +757,7 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
     con.close()
 
     log.debug("Printing table info after update")
-    sqlh.print_all_table_information(USAGE_TRACKING_TABLE_NAME)
+    sqlh.log_all_table_information(USAGE_TRACKING_TABLE_NAME)
 
 
 def update_session_start_bytes(
@@ -1087,29 +1116,29 @@ def check_if_user_logged_in(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return bool(logged_in)
 
 
-def insert_mac_arp_db(user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def insert_ip_addr_ip_db(ip_addr, user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
     cur = con.cursor()
     cur.execute(
         """
-    INSERT INTO arp_timeouts (mac_address, last_timestamp, timeout)
+    INSERT INTO ip_timeouts (ip_addr, mac_addr, last_timestamp)
     VALUES (?, ?, ?)
     """,
         (
+            ip_addr,
             user_mac,
             now,
-            0,
         ),
     )
     con.commit()
     con.close()
 
-    log.info(f"Inserted user at {user_mac} into arp_timeouts table.")
+    log.info(f"Inserted user at {user_mac} into ip_timeouts table.")
 
 
-def select_arp_row(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def select_ip_row(ip_addr, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
@@ -1117,27 +1146,27 @@ def select_arp_row(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     cur.execute(
         """
         SELECT *
-        FROM arp_timeouts
-        WHERE mac_address = ?
+        FROM ip_timeouts
+        WHERE ip_addr = ?
         """,
-        (mac_address,),
+        (ip_addr,),
     )
     row = cur.fetchone()
     con.close()
     return row
 
 
-def update_mac_arp_db(
-    user_mac, now, time_left_before_timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH
+def update_ip_db(
+    ip_addr, now, time_left_before_timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
-    row = select_arp_row(user_mac)
+    row = select_ip_row(ip_addr)
 
     if row:
-        columns = [column for column in sqlh.fetch_all_columns("arp_timeouts", db_path)]
+        columns = [column for column in sqlh.fetch_all_columns("ip_timeouts", db_path)]
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
-        values[2] = now
-        values[4] = time_left_before_timeout
+        values[3] = now
+        values[5] = time_left_before_timeout
 
         con = sqlite3.connect(
             db_path, timeout=30, isolation_level=None
@@ -1145,27 +1174,27 @@ def update_mac_arp_db(
         cur = con.cursor()
         cur.execute(
             f"""
-            UPDATE arp_timeouts
+            UPDATE ip_timeouts
             SET {set_clause}
-            WHERE mac_address = ?
+            WHERE ip_addr = ?
             """,
-            values + [user_mac],
+            values + [ip_addr],
         )
         con.commit()
         con.close()
-        log.debug(f"Updated arp_timeouts table for user at {user_mac}.")
+        log.debug(f"Updated ip_timeouts table for user at {ip_addr}.")
     else:
         raise sqlh.MACAddressError(
-            f"Failed attempting to update arptable for MAC address {user_mac}: Device does not exist."
+            f"Failed attempting to update ip timeouts table for IP address {ip_addr}: Device does not exist."
         )
 
 
-def delete_arp_mac(mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def delete_ip_neigh(ip_addr, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
     cur = con.cursor()
-    cur.execute("DELETE FROM arp_timeouts WHERE mac_address = ?", (mac_address,))
+    cur.execute("DELETE FROM ip_timeouts WHERE ip_addr = ?", (ip_addr,))
     con.commit()
     con.close()
-    log.debug(f"Deleted {mac_address} from arp_timeouts table.")
+    log.debug(f"Deleted {ip_addr} from ip_timeouts table.")

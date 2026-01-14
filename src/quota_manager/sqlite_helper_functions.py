@@ -5,6 +5,7 @@ RADIUS_DB_PATH = "/overlay/freeradius3/freeradius.db"
 USAGE_TRACKING_DB_PATH = "/overlay/freeradius3/usage_tracking.db"
 DEFAULT_SCHEMA_PATH = "/etc/freeradius3/mods-config/sql/main/sqlite/schema.sql"
 
+UTC_OFFSET = 2
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,18 @@ def delete_table(table_name, db_path):
     cur = con.cursor()
 
     cur.execute(f"DROP TABLE IF EXISTS {table_name};")
+
+    con.commit()
+    con.close()
+
+
+def wipe_table(table_name, db_path):
+
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cur = con.cursor()
+
+    cur.execute(f"DELETE FROM {table_name};")
+    cur.execute(f"DELETE FROM sqlite_sequence WHERE name='{table_name}';")
 
     con.commit()
     con.close()
@@ -76,7 +89,18 @@ def check_if_table_empty(table, db_path):
     return False
 
 
-def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
+def log_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    res = cur.execute(f"SELECT * FROM {table};")
+    rows = res.fetchall()
+    for row in rows:
+        log.debug(row)
+
+
+def log_all_radius_user_information(db_path=RADIUS_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
@@ -87,15 +111,15 @@ def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
         log.debug(row)
 
 
-def print_all_radius_accounting_information(db_path=RADIUS_DB_PATH):
+def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
     cur = con.cursor()
-    res = cur.execute("SELECT username, attribute, value FROM radacct;")
+    res = cur.execute("SELECT username, attribute, value FROM radcheck;")
     rows = res.fetchall()
     for row in rows:
-        log.debug(row)
+        print(row)
 
 
 def print_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
@@ -106,4 +130,4 @@ def print_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
     res = cur.execute(f"SELECT * FROM {table};")
     rows = res.fetchall()
     for row in rows:
-        log.debug(row)
+        print(row)
