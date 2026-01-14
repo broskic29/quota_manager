@@ -134,11 +134,17 @@ def check_if_elem_in_set(test_elem, table_family, table_name, set_name):
 
     rc, out, err = nft.json_cmd(set_payload)
 
-    elements = out["nftables"][1]["set"]["elem"]
+    try:
+        elements = out["nftables"][1]["set"]["elem"]
 
-    res = [elem["elem"]["val"] for elem in elements if test_elem in elem["elem"]["val"]]
+        res = [
+            elem["elem"]["val"] for elem in elements if test_elem in elem["elem"]["val"]
+        ]
 
-    return bool(res)
+        return bool(res)
+    except (KeyError, TypeError):
+        log.info(f"Element {test_elem} not in set {set_name}.")
+        return False
 
 
 def pull_elements_from_custom_sets(table_family, table_name):

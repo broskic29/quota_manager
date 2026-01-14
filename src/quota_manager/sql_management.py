@@ -382,6 +382,24 @@ def insert_user_into_group_usage(
     con.close()
 
 
+def get_groups_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT group_name
+        FROM groups
+        """,
+    )
+    res = cur.fetchall()
+    if len(res) < 1:
+        log.debug(f"No usage groups exist.")
+        return None
+    return [entry[0] for entry in res]
+
+
 def create_user_usage(
     username,
     group_name,

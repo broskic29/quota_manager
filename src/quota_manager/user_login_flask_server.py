@@ -12,15 +12,195 @@ user_login_app = Flask(__name__)
 log = logging.getLogger(__name__)
 
 login_form = """
-<h2>Wi-Fi Login</h2>
-<form method="post">
-    Username: <input type="text" name="username" required><br><br>
-    Password: <input type="password" name="password" required><br><br>
-    <input type="submit" value="Login">
-</form>
-{% if error %}
-<p style="color:red;">{{ error }}</p>
-{% endif %}
+<div class="form-container">
+    <h2>Wi-Fi Login</h2>
+
+    <form method="post">
+        <label>
+            Username:
+            <input type="text" name="username" required placeholder="Enter your username">
+        </label>
+
+        <label>
+            Password:
+            <input type="password" name="password" required placeholder="Enter your password">
+        </label>
+
+        <input type="submit" value="Login">
+    </form>
+
+    {% if error %}
+    <p class="error-message">{{ error }}</p>
+    {% endif %}
+</div>
+
+<style>
+.form-container {
+    max-width: 400px;
+    margin: 40px auto;
+    padding: 20px 25px;
+    border-radius: 10px;
+    background-color: #f8f9fa;
+    box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+    font-family: Arial, sans-serif;
+}
+
+h2 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 20px;
+}
+
+form label {
+    display: block;
+    margin-bottom: 15px;
+    font-weight: 500;
+    color: #444;
+}
+
+form input[type="text"],
+form input[type="password"] {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 1rem;
+    margin-top: 5px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+form input[type="submit"] {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 1rem;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+form input[type="submit"]:hover {
+    background-color: #0056b3;
+}
+
+.error-message {
+    color: red;
+    margin-top: 15px;
+    text-align: center;
+    font-size: 0.9rem;
+}
+</style>
+
+"""
+
+success_page = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Success</title>
+
+<style>
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: #f4f6f8;
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .container {
+        background: white;
+        padding: 2rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        text-align: center;
+        width: 90%;
+        max-width: 400px;
+    }
+
+    h2 {
+        color: #2d7a2d;
+        margin-bottom: 1rem;
+    }
+
+    p {
+        color: #444;
+        margin-bottom: 2rem;
+        font-size: 1rem;
+    }
+
+    a.button {
+        display: inline-block;
+        padding: 0.75rem 1.25rem;
+        background-color: #007bff;
+        color: white;
+        text-decoration: none;
+        font-weight: bold;
+        border-radius: 8px;
+        transition: background-color 0.2s ease;
+    }
+
+    a.button:hover {
+        background-color: #0056b3;
+    }
+</style>
+</head>
+<body>
+    <div class="container">
+        <p>{{ message }}</p>
+        <a href="http://192.168.3.1:5000/login" style="color: #007bff; text-decoration: none; font-size: 0.95rem;">
+            ← Back to Login Page
+        </a>
+    </div>
+</body>
+</html>
+"""
+
+iphone_success_page = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Success</title>
+    <style>
+        body {{
+            font-family: system-ui, sans-serif;
+            background-color: #f7f7f7;
+            color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }}
+        .message-box {{
+            background: #fff;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+        }}
+        h2 {{ margin-top: 0; font-size: 1.5rem; color: #333; }}
+        p {{ font-size: 1rem; margin: 1rem 0 0 0; }}
+        small {{ display: block; font-size: 0.85rem; color: #666; margin-top: 0.5rem; }}
+    </style>
+</head>
+<body>
+    <div class="message-box">
+        <h2>Success!</h2>
+        <p>Login successful! Device now has Internet access.</p>
+        <small>Please press 'Cancel' or 'Done' in the top right corner, then select the 'Use without internet' option.</small>
+    </div>
+</body>
+</html>
 """
 
 
@@ -82,27 +262,37 @@ def login():
 
             ua = request.headers.get("User-Agent", "")
             log.debug(ua)
-            if "Apple" in ua or "Mac" in ua:
+            if ("Apple" in ua or "Mac" in ua) and "iPhone" not in ua:
+                log.info(
+                    f"Apple device detected for {user_mac}, returning regular page"
+                )
                 return render_template_string(
-                    "<h3>Login successful!</h3><p>Device {{ mac }} now has Internet access at {{ ip }}.</p>",
-                    mac=user_mac,
-                    ip=user_ip,
+                    success_page,
+                    message=f"Login successful! Device {user_mac} now has Internet access.",
                 )
             elif "iPhone" in ua:
                 # Apple CNA: return 200 Success to close portal
+                log.info(f"iPhone CNA detected for {user_mac}, returning 200")
                 return Response(
-                    "Success! Please press 'Cancel' and then select the 'Use without internet' option.",
+                    iphone_success_page,
                     status=200,
                     mimetype="text/html",
                 )
             elif "Android" in ua:
                 # Android CNA: redirect 204
-                return redirect("/generate_204")
+                log.info(f"Android CNA detected for {user_mac}, returning 204")
+                return Response(
+                    iphone_success_page,
+                    status=204,
+                    mimetype="text/html",
+                )
             else:
+                log.info(
+                    f"Other device detected for {user_mac}, returning regular page"
+                )
                 return render_template_string(
-                    "<h3>Login successful!</h3><p>Device {{ mac }} now has Internet access at {{ ip }}.</p>",
-                    mac=user_mac,
-                    ip=user_ip,
+                    success_page,
+                    message=f"Login successful! Device {user_mac} now has Internet access.",
                 )
         else:
             log.info(f"Login unsuccessful. Invalid username or password")
