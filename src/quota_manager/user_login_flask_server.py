@@ -49,13 +49,22 @@ def login():
         if error:
             return render_template_string(login_form, error=error)
 
-        if flu.authenticate_radius(username, password, user_ip, user_mac):
+        rad_auth, error = flu.safe_call(
+            flu.authenticate_radius,
+            error,
+            USER_LOGIN_ERROR_MESSAGES,
+            username,
+            password,
+            user_ip,
+            user_mac,
+        )
 
-            if error:
-                return render_template_string(login_form, error=error)
+        if error:
+            return render_template_string(login_form, error=error)
 
-            # Check if someone else was previously logged in with that mac address
-            old_username_for_mac_address, _ = flu.safe_call(
+        if rad_auth:
+
+            old_username_for_mac_addresse, _ = flu.safe_call(
                 qm.check_which_user_logged_in_for_mac_address,
                 error,
                 USER_LOGIN_ERROR_MESSAGES,

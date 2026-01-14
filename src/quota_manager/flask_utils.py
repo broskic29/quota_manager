@@ -1,5 +1,5 @@
 from flask import request, Response
-from pyrad.client import Client
+from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
 from pyrad.packet import AccessRequest, AccessAccept
 
@@ -138,7 +138,7 @@ def authenticate_radius(username, password, ip_address, mac_address):
                 log.info(f"RADIUS: Successfully reinitialized database.")
 
             return False
-    except timeout:
+    except Timeout:
         log.info(f"RADIUS: User {username} failed to authenticate.")
         return False
 

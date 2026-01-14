@@ -70,9 +70,8 @@ def wipe_scheduler(stop_event: threading.Event):
         qm.wipe_ip_neigh_db()
         log.info("IP neigh db wiped.")
 
-        qm.reset_throttling()
-        log.info("Throttling reset.")
-        # Add another function call: _reset_user_packet_dropping()
+        qm.reset_throttling_and_packet_dropping()
+        log.info("Throttling and packet dropping reset.")
 
 
 def usage_updater(stop_event: threading.Event):
@@ -87,7 +86,7 @@ def usage_updater(stop_event: threading.Event):
         log.debug(usage_dict)
 
         log.debug("Enforcing quotas...")
-        quota_dict = qm.enforce_quotas_all_users()
+        quota_dict = qm.enforce_quotas_all_users(throttling=False)
         log.debug(quota_dict)
 
         log.debug("Updating persistent nft sets...")
