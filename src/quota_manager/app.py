@@ -6,7 +6,6 @@ from time import sleep
 
 from quota_manager.usage_tracker import start_usage_tracking
 from quota_manager.sql_management import init_freeradius_db, init_usage_db
-from .quota_management import initialize_nftables_sets
 from quota_manager.user_login_flask_server import user_login_app
 from quota_manager.admin_management_flask_server import admin_management_app
 from quota_manager.ip_neigh_timeout_listener import (
@@ -29,7 +28,6 @@ class QuotaManagerApp:
 
         init_freeradius_db()
         init_usage_db()
-        initialize_nftables_sets()
 
         self._start_flask_servers()
         self._start_usage_tracking()

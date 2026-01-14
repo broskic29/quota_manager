@@ -14,10 +14,11 @@ GROUP_TABLE_NAME = "groups"
 GROUP_USERS_TABLE_NAME = "group_users"
 RADIUS_TABLE_NAME = "radcheck"
 
-IP_TIMEOUT = 10
-
 LOGGED_OUT = 0
 LOGGED_IN = 1
+
+IP_POLLING = 30
+IP_TIMEOUT = int(3 * IP_POLLING)
 
 
 class UserNameError(Exception):
@@ -452,8 +453,8 @@ def select_user_row(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
 def login_user_usage(
     username,
-    mac_address,
     ip_address,
+    mac_address,
     session_start_bytes,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
@@ -471,8 +472,8 @@ def login_user_usage(
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
         log.debug(f"Values for user {username}: {values}")
-        values[2] = mac_address
-        values[3] = ip_address
+        values[2] = ip_address
+        values[3] = mac_address
         values[8] = session_start_bytes
         values[9] = LOGGED_IN
 
@@ -587,6 +588,35 @@ def fetch_user_mac_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return res[0]
 
 
+def fetch_user_ip_address_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+
+    # Raise error if user doesn't exist
+    user_exists = check_if_user_exists(username)
+
+    if not user_exists:
+        log.error(
+            f"Failed fetching IP address for user {username}: not found in users table."
+        )
+        raise UserNameError(f"User {username} does not exist.")
+
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cur = con.cursor()
+
+    cur.execute(
+        """
+        SELECT ip_address
+        FROM users
+        WHERE username = ?
+        """,
+        (username,),
+    )
+    res = cur.fetchone()
+    if res is None:
+        log.debug(f"No IP address can be found for user: {username}")
+        return res
+    return res[0]
+
+
 def get_usernames_from_mac_address_usage(
     mac_address, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
@@ -629,6 +659,33 @@ def get_usernames_from_ip_address_usage(
     return [entry[0] for entry in res]
 
 
+def get_usernames_from_ip_and_mac_usage(
+    ip_addr, mac_addr, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cur = con.cursor()
+
+    cur.execute(
+        """
+        SELECT username
+        FROM users
+        WHERE ip_address = ? AND mac_address = ?
+
+        """,
+        (
+            ip_addr,
+            mac_addr,
+        ),
+    )
+    res = cur.fetchall()
+    if len(res) < 1:
+        log.debug(
+            f"No usernames can be found for IP address: {ip_addr}, MAC address {mac_addr}"
+        )
+        return None
+    return [entry[0] for entry in res]
+
+
 def fetch_all_usernames_usage(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
@@ -646,11 +703,11 @@ def fetch_all_ip_addr_ip_timeouts(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     cur = con.cursor()
     cur.execute(
         f"""
-        SELECT ip_addr
+        SELECT ip_addr, mac_addr
         FROM {IP_TIMEOUT_TABLE_NAME}
         """,
     )
-    return [entry[0] for entry in cur.fetchall()]
+    return cur.fetchall()
 
 
 def fetch_session_total_bytes(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
@@ -714,24 +771,6 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
     cur = con.cursor()
-
-    # cur.execute(
-    #     """
-    # CREATE TABLE IF NOT EXISTS users (
-    #     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    #     username TEXT NOT NULL,
-    #     mac_address TEXT,
-    #     ip_address TEXT,
-    #     daily_usage_bytes INTEGER NOT NULL DEFAULT 0,
-    #     monthly_usage_bytes INTEGER NOT NULL DEFAULT 0,
-    #     session_total_bytes INTEGER NOT NULL DEFAULT 0,
-    #     all_time_bytes INTEGER NOT NULL DEFAULT 0,
-    #     session_start_bytes NOT NULL DEFAULT 0,
-    #     logged_in INTEGER NOT NULL DEFAULT 0,
-    #     UNIQUE(username)
-    # );
-    # """
-    # )
 
     cur.execute(
         """
@@ -1116,7 +1155,7 @@ def check_if_user_logged_in(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return bool(logged_in)
 
 
-def insert_ip_addr_ip_db(ip_addr, user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+def insert_ip_addr_ip_db(user_ip, user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
@@ -1127,7 +1166,7 @@ def insert_ip_addr_ip_db(ip_addr, user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_
     VALUES (?, ?, ?)
     """,
         (
-            ip_addr,
+            user_ip,
             user_mac,
             now,
         ),
@@ -1135,7 +1174,7 @@ def insert_ip_addr_ip_db(ip_addr, user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_
     con.commit()
     con.close()
 
-    log.info(f"Inserted user at {user_mac} into ip_timeouts table.")
+    log.info(f"Inserted user at {user_ip} into ip_timeouts table.")
 
 
 def select_ip_row(ip_addr, db_path=sqlh.USAGE_TRACKING_DB_PATH):
@@ -1184,7 +1223,7 @@ def update_ip_db(
         con.close()
         log.debug(f"Updated ip_timeouts table for user at {ip_addr}.")
     else:
-        raise sqlh.MACAddressError(
+        raise sqlh.IPAddressError(
             f"Failed attempting to update ip timeouts table for IP address {ip_addr}: Device does not exist."
         )
 
