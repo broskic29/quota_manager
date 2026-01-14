@@ -11,8 +11,6 @@ from quota_manager import sqlite_helper_functions as sqlh
 
 log = logging.getLogger(__name__)
 
-UTC_OFFSET = 2
-
 
 def mac_from_ip(ip):
     arp_table = get_arp_table()
@@ -380,7 +378,7 @@ def ip_timeout_updater(ip_addr, mac_addr):
 
     if check_which_user_logged_in_for_ip_address(ip_addr):
 
-        tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
+        tz = dt.timezone(dt.timedelta(hours=sqlh.UTC_OFFSET))
         now = dt.datetime.now(tz).timestamp()
 
         row = sqlm.select_ip_row(ip_addr)
@@ -408,7 +406,7 @@ def ip_timeout_updater(ip_addr, mac_addr):
 
 def ip_timeout_enforcer():
 
-    tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
+    tz = dt.timezone(dt.timedelta(hours=sqlh.UTC_OFFSET))
     now = dt.datetime.now(tz).timestamp()
 
     ip_addrs = sqlm.fetch_all_ip_addr_ip_timeouts()
@@ -423,6 +421,7 @@ def ip_timeout_enforcer():
 
         if time_left_before_timeout <= 0:
             log.debug(f"ip_timeout_enforcer: Enforcing timeout for user at {ip_addr}")
+
             success = ip_enforce_timeout(ip_addr)
 
             # May need to add some else logic here in future if enforcement gets more complicated.
@@ -441,11 +440,19 @@ def ip_timeout_enforcer():
             log.debug(f"ip_timeout_enforcer: Updated ip timeouts for user at {ip_addr}")
 
 
-def ip_enforce_timeout(ip_addr, mac_addr):
+def ip_enforce_timeout(ip_addr):
+
+    success = True
     # Log user out
-    log_out_user(mac_addr)
+    # success = log_out_user(ip_addr)
     log.debug("ip_enforce_timeout: Placeholder for user logout...")
 
     # In future, maybe add to short DHCP lease pool.
 
-    log.info(f"Timeout enforced for user at {ip_addr}/{mac_addr}")
+    log.info(f"Timeout enforced for user at {ip_addr}")
+
+    return success
+
+
+def wipe_ip_neigh_db():
+    sqlh.wipe_table(sqlm.IP_TIMEOUT_TABLE_NAME, sqlh.USAGE_TRACKING_DB_PATH)

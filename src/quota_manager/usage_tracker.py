@@ -7,6 +7,8 @@ from time import sleep
 import quota_manager.sql_management as sqlm
 import quota_manager.quota_management as qm
 
+from quota_manager.sqlite_helper_functions import UTC_OFFSET
+
 ACCOUNT_BILLING_DAY = 7
 UPDATE_INTERVAL = 10
 ONE_DAY = 1
@@ -42,7 +44,7 @@ def monthly_delay_calc(now, tz):
 
 def wipe_scheduler(stop_event: threading.Event):
     while not stop_event.is_set():
-        tz = dt.timezone(dt.timedelta(hours=qm.UTC_OFFSET))
+        tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
         now = dt.datetime.now(tz)
 
         daily_delay = daily_delay_calc(now, tz)
@@ -61,6 +63,12 @@ def wipe_scheduler(stop_event: threading.Event):
 
         sqlm.usage_daily_wipe()
         log.info("Daily wipe complete.")
+
+        qm.log_out_all_users()
+        log.info("All users logged out.")
+
+        qm.wipe_ip_neigh_db()
+        log.info("IP neigh db wiped.")
 
         qm.reset_throttling()
         log.info("Throttling reset.")

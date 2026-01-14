@@ -15,7 +15,6 @@ from quota_manager.ip_neigh_timeout_listener import (
     ip_neigh_enforcer,
 )
 
-
 log = logging.getLogger(__name__)
 
 

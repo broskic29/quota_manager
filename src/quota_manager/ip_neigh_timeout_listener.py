@@ -4,22 +4,12 @@ from queue import Queue, Empty
 from time import sleep
 from pyroute2 import IPRoute
 
-from pyroute2.netlink.rtnl.ndmsg import (
-    NUD_INCOMPLETE,
-    NUD_REACHABLE,
-    NUD_STALE,
-    NUD_DELAY,
-    NUD_PROBE,
-    NUD_FAILED,
-    NUD_NOARP,
-    NUD_PERMANENT,
-)
+from pyroute2.netlink.rtnl.ndmsg import NUD_REACHABLE
 
-from quota_manager import quota_management as qm
+from quota_manager.quota_management import ip_timeout_updater, ip_timeout_enforcer
 from quota_manager.sql_management import IP_TIMEOUT
 
-UTC_OFFSET = 2
-POLLING_INTERVAL = 10
+IP_POLLING = int(1.5 * IP_TIMEOUT)
 
 event_queue = Queue()
 log = logging.getLogger(__name__)
@@ -32,7 +22,7 @@ def ip_neigh_poller(stop_event: threading.Event):
         neighbors = ip.get_neighbours()
         for neighbor in neighbors:
             event_queue.put(neighbor)
-        stop_event.wait(POLLING_INTERVAL)
+        stop_event.wait(IP_POLLING)
 
 
 def ip_neigh_timeout_tracking(stop_event: threading.Event):
@@ -48,7 +38,7 @@ def ip_neigh_timeout_tracking(stop_event: threading.Event):
                 ip_addr = dict(n.get("attrs")).get("NDA_DST")
                 mac_addr = dict(n.get("attrs")).get("NDA_LLADDR")
 
-                qm.ip_timeout_updater(ip_addr, mac_addr)
+                ip_timeout_updater(ip_addr, mac_addr)
 
         except Exception as e:
             log.error(f"Unexpected error updating ip timeout database for {n}: {e}.")
@@ -56,5 +46,5 @@ def ip_neigh_timeout_tracking(stop_event: threading.Event):
 
 def ip_neigh_enforcer(stop_event: threading.Event):
     while not stop_event.is_set():
-        qm.ip_timeout_enforcer()
+        ip_timeout_enforcer()
         stop_event.wait(IP_TIMEOUT)

@@ -14,15 +14,10 @@ GROUP_TABLE_NAME = "groups"
 GROUP_USERS_TABLE_NAME = "group_users"
 RADIUS_TABLE_NAME = "radcheck"
 
-IP_TIMEOUT = 30
+IP_TIMEOUT = 10
 
 LOGGED_OUT = 0
 LOGGED_IN = 1
-
-NOT_TIMED_OUT = 0
-TIMED_OUT = 1
-
-UTC_OFFSET = 2
 
 
 class UserNameError(Exception):
@@ -496,7 +491,7 @@ def login_user_usage(
         )
 
         log.info(f"User {username} successfully updated.")
-        sqlh.print_all_table_information(
+        sqlh.log_all_table_information(
             USAGE_TRACKING_TABLE_NAME, db_path=sqlh.USAGE_TRACKING_DB_PATH
         )
 
@@ -713,7 +708,7 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
         raise UserNameError(f"User {username} does not exist.")
 
     log.debug("Printing table info before update")
-    sqlh.print_all_table_information(USAGE_TRACKING_TABLE_NAME)
+    sqlh.log_all_table_information(USAGE_TRACKING_TABLE_NAME)
 
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -762,7 +757,7 @@ def update_user_bytes_usage(byte_delta, username, db_path=sqlh.USAGE_TRACKING_DB
     con.close()
 
     log.debug("Printing table info after update")
-    sqlh.print_all_table_information(USAGE_TRACKING_TABLE_NAME)
+    sqlh.log_all_table_information(USAGE_TRACKING_TABLE_NAME)
 
 
 def update_session_start_bytes(
