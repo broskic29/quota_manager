@@ -7,9 +7,7 @@ from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl.ndmsg import NUD_REACHABLE
 
 from quota_manager.quota_management import ip_timeout_updater, ip_timeout_enforcer
-from quota_manager.sql_management import IP_TIMEOUT
-
-IP_POLLING = int(1.5 * IP_TIMEOUT)
+from quota_manager.sql_management import IP_POLLING, IP_TIMEOUT
 
 event_queue = Queue()
 log = logging.getLogger(__name__)
@@ -46,5 +44,5 @@ def ip_neigh_timeout_tracking(stop_event: threading.Event):
 
 def ip_neigh_enforcer(stop_event: threading.Event):
     while not stop_event.is_set():
-        ip_timeout_enforcer()
         stop_event.wait(IP_TIMEOUT)
+        ip_timeout_enforcer()

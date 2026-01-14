@@ -11,7 +11,13 @@ log = logging.getLogger(__name__)
 
 
 class MACAddressError(Exception):
-    """Raised when a user does not exist."""
+    """Raised when a user MAC does not exist."""
+
+    pass
+
+
+class IPAddressError(Exception):
+    """Raised when a user IP does not exist."""
 
     pass
 

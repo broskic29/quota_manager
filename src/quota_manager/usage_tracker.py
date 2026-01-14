@@ -75,6 +75,9 @@ def wipe_scheduler(stop_event: threading.Event):
 
 
 def usage_updater(stop_event: threading.Event):
+
+    quota_dict = {"under_quota": [], "over_quota": []}
+
     while not stop_event.is_set():
         sleep(UPDATE_INTERVAL)
 
@@ -86,11 +89,8 @@ def usage_updater(stop_event: threading.Event):
         log.debug(usage_dict)
 
         log.debug("Enforcing quotas...")
-        quota_dict = qm.enforce_quotas_all_users(throttling=False)
+        quota_dict = qm.enforce_quotas_all_users(quota_dict, throttling=False)
         log.debug(quota_dict)
-
-        log.debug("Updating persistent nft sets...")
-        qm.ensure_set_persistence()
 
 
 def start_usage_tracking(stop_event: threading.Event):

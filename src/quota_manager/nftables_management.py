@@ -46,7 +46,7 @@ def operation_on_set_element(operation, table_family, table_name, set_name, elem
     rc, output, error = nft.json_cmd(cmd_dict)
 
 
-def get_bytes_from_user(user_mac):
+def get_bytes_from_user(user_ip):
     nft = nftables.Nftables()
     nft.set_json_output(True)
     rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
@@ -56,7 +56,7 @@ def get_bytes_from_user(user_mac):
 
     if not "elem" in sets[1]["set"]:
         log.error(
-            f"ERROR: Operation to fetch usage failed for user {user_mac}: set empty."
+            f"ERROR: Operation to fetch usage failed for user {user_ip}: set empty."
         )
         raise NFTSetMissingElementError(f"Authorized users set empty.")
 
@@ -65,14 +65,14 @@ def get_bytes_from_user(user_mac):
     user_bytes = [
         elem["elem"]["counter"]["bytes"]
         for elem in elements
-        if elem["elem"]["val"] == user_mac
+        if elem["elem"]["val"] == user_ip
     ]
 
     if len(user_bytes) < 1:
         log.error(
-            f"ERROR: Operation to fetch usage failed for user {user_mac}: MAC address not in set."
+            f"ERROR: Operation to fetch usage failed for user {user_ip}: IP address not in set."
         )
-        raise sqlh.MACAddressError(f"Usage bytes undefined for user {user_mac}")
+        raise sqlh.IPAddressError(f"Usage bytes undefined for user {user_ip}")
 
     return user_bytes[0]
 
