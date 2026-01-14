@@ -235,30 +235,6 @@ def enforce_quotas_all_users(
 
                     reset_throttling_and_packet_dropping(username)
 
-                nftm.operation_on_set_element(
-                    "delete",
-                    nftm.TABLE_FAMILY,
-                    nftm.TABLE_NAME,
-                    nftm.DROP_SET_NAME,
-                    mac_address,
-                )
-
-                if not nftm.check_if_elem_in_set(
-                    mac_address,
-                    nftm.TABLE_FAMILY,
-                    nftm.TABLE_NAME,
-                    nftm.HIGH_SPEED_SET_NAME,
-                ):
-                    nftm.operation_on_set_element(
-                        "add",
-                        nftm.TABLE_FAMILY,
-                        nftm.TABLE_NAME,
-                        nftm.HIGH_SPEED_SET_NAME,
-                        mac_address,
-                    )
-
-                log.debug(f"Undropped user {username}.")
-
     return quota_dict
 
 
@@ -390,15 +366,6 @@ def delete_user_from_system(username):
     unauthorize_user(username)
 
     log.info(f"Successfully deleted user {username} from system.")
-
-    # Add nftables rule to switch this mac to authorized set
-    nftm.operation_on_set_element(
-        "delete",
-        nftm.TABLE_FAMILY,
-        nftm.TABLE_NAME,
-        nftm.DROP_SET_NAME,
-        old_mac,
-    )
 
 
 def check_which_user_logged_in_for_mac_address(mac_address):
