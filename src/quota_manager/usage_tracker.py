@@ -1,4 +1,3 @@
-import asyncio
 import threading
 import datetime as dt
 import logging
@@ -8,9 +7,10 @@ from time import sleep
 import quota_manager.sql_management as sqlm
 import quota_manager.quota_management as qm
 
+from quota_manager.sqlite_helper_functions import UTC_OFFSET
+
 ACCOUNT_BILLING_DAY = 7
 UPDATE_INTERVAL = 10
-UTC_OFFSET = 2
 ONE_DAY = 1
 ONE_MONTH = 1
 
@@ -42,8 +42,8 @@ def monthly_delay_calc(now, tz):
     return monthly_delay
 
 
-def wipe_scheduler():
-    while True:
+def wipe_scheduler(stop_event: threading.Event):
+    while not stop_event.is_set():
         tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
         now = dt.datetime.now(tz)
 
@@ -64,17 +64,25 @@ def wipe_scheduler():
         sqlm.usage_daily_wipe()
         log.info("Daily wipe complete.")
 
-        qm.reset_throttling()
-        log.info("Throttling reset.")
-        # Add another function call: _reset_user_packet_dropping()
+        qm.log_out_all_users()
+        log.info("All users logged out.")
+
+        qm.wipe_ip_neigh_db()
+        log.info("IP neigh db wiped.")
+
+        qm.reset_throttling_and_packet_dropping()
+        log.info("Throttling and packet dropping reset.")
 
 
-def usage_updater():
+def usage_updater(stop_event: threading.Event):
 
-    quota_dict = {}
+    quota_dict = {"under_quota": [], "over_quota": []}
 
-    while True:
+    while not stop_event.is_set():
         sleep(UPDATE_INTERVAL)
+
+        if stop_event.is_set():
+            break
 
         log.debug("Updating user byte totals...")
         usage_dict = qm.update_all_users_bytes()
@@ -84,19 +92,15 @@ def usage_updater():
         quota_dict = qm.enforce_quotas_all_users(quota_dict, throttling=False)
         log.debug(quota_dict)
 
-        log.debug("Updating persistent nft sets...")
-        qm.ensure_set_persistence()
 
+def start_usage_tracking(stop_event: threading.Event):
+    """Start the wipe scheduler and usage updater threads"""
+    t_wipe_scheduler = threading.Thread(
+        target=wipe_scheduler, args=(stop_event,), daemon=True
+    )
+    t_usage_updater = threading.Thread(
+        target=usage_updater, args=(stop_event,), daemon=True
+    )
 
-async def daemon():
-    # Run the scheduler in the background
-    t_wipe_scheduler = threading.Thread(target=wipe_scheduler, daemon=True)
-    t_usage_updater = threading.Thread(target=usage_updater, daemon=True)
-
-    t_wipe_scheduler.start()
-    t_usage_updater.start()
-
-    try:
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        log.info("Usage daemon cancelled")
+    log.info("Usage tracking threads started")
+    return [t_wipe_scheduler, t_usage_updater]

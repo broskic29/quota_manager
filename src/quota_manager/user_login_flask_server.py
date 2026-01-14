@@ -3,6 +3,7 @@ from flask import Flask, request, render_template_string, redirect, Response
 import logging
 
 import quota_manager.sql_management as sqlm
+import quota_manager.sqlite_helper_functions as sqlh
 import quota_manager.nftables_management as nftm
 import quota_manager.quota_management as qm
 import quota_manager.flask_utils as flu
@@ -213,7 +214,7 @@ def login():
         user_ip = request.remote_addr
 
         USER_LOGIN_ERROR_MESSAGES = {
-            nftm.MACAddressError: f"Login failed. MAC address for user {username} could not be determined. Please disconnect from network and try again.",
+            sqlh.IPAddressError: f"Login failed. IP address for user {username} could not be determined. Please disconnect from network and try again.",
             sqlm.UserNameError: f"Failed attempting to log in user {username}: User does not exist.",
             flu.UndefinedException: "Internal error creating user. Please reload page.",
         }
@@ -243,75 +244,12 @@ def login():
 
         if rad_auth:
 
-            old_user_mac = None
-
-            try:
-                old_user_mac = sqlm.fetch_user_mac_address_usage(username)
-            except nftm.MACAddressError:
-                pass
-
-            if error:
-                return render_template_string(login_form, error=error)
-
-            old_username_for_mac_address, _ = flu.safe_call(
-                qm.check_which_user_logged_in_for_mac_address,
-                error,
-                USER_LOGIN_ERROR_MESSAGES,
-                user_mac,
-            )
-
-            session_start_bytes = 0
-
-            if old_username_for_mac_address:
-
-                session_start_bytes, error = flu.safe_call(
-                    qm.initialize_session_start_bytes,
-                    error,
-                    USER_LOGIN_ERROR_MESSAGES,
-                    user_mac,
-                )
-
-                if error:
-                    return render_template_string(login_form, error=error)
-
-                _, error = flu.safe_call(
-                    qm.log_out_user,
-                    error,
-                    USER_LOGIN_ERROR_MESSAGES,
-                    old_username_for_mac_address,
-                )
-
-                if error:
-                    return render_template_string(login_form, error=error)
-
             _, error = flu.safe_call(
-                sqlm.wipe_session_total_bytes,
+                qm.log_in_user,
                 error,
                 USER_LOGIN_ERROR_MESSAGES,
                 username,
-            )
-
-            if error:
-                return render_template_string(login_form, error=error)
-
-            _, error = flu.safe_call(
-                sqlm.login_user_usage,
-                error,
-                USER_LOGIN_ERROR_MESSAGES,
-                username,
-                user_mac,
                 user_ip,
-                session_start_bytes,
-            )
-
-            if error:
-                return render_template_string(login_form, error=error)
-
-            _, error = flu.safe_call(
-                qm.mac_update,
-                error,
-                USER_LOGIN_ERROR_MESSAGES,
-                old_user_mac,
                 user_mac,
             )
 

@@ -13,6 +13,7 @@ python_arptable = "*"
 pip-nftables = "*"
 jsonschema = "*"
 waitress = "*"
+pyroute2 = "*"
 quota_manager = {path = ".", editable = true}
 
 [dev-packages]
