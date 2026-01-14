@@ -254,11 +254,20 @@ def log_out_user(username, user_mac=None):
                 f"Successfully deleted user {username} MAC address ({user_mac}) from set"
             )
 
+    sqlm.wipe_session_total_bytes(username)
+
     sqlm.logout_user_usage(username)
 
     log.info(f"Successfully logged out user {username}.")
 
     return True
+
+
+def log_out_all_users():
+    usernames = sqlm.fetch_all_usernames_usage()
+
+    for username in usernames:
+        log_out_user(username)
 
 
 def delete_user_from_system(username):
@@ -280,6 +289,7 @@ def delete_user_from_system(username):
 
 
 def mac_update(old_mac, new_mac):
+    # DEPRECATED: DO NOT USE! Could unauthenticate a user without logging them out...
     # if user has dynamic mac, remove old one from set
     if old_mac != new_mac and old_mac is not None:
 
@@ -319,6 +329,22 @@ def check_which_user_logged_in_for_mac_address(mac_address):
     return None
 
 
+def check_which_user_logged_in_for_ip_address(ip_addr):
+    usernames = sqlm.get_usernames_from_ip_address_usage(ip_addr)
+
+    if usernames is not None:
+        for username in usernames:
+            logged_in = sqlm.check_if_user_logged_in(username)
+
+            if logged_in:
+                log.debug(
+                    f"check_which_user_logged_in_for_ip_address: User {username} logged in at IP address {ip_addr}"
+                )
+                return username
+
+    return None
+
+
 def ensure_set_persistence():
     elem_dict = nftm.pull_elements_from_custom_sets(
         nftm.TABLE_FAMILY, nftm.CAPTIVE_TABLE_NAME
@@ -348,71 +374,78 @@ def initialize_nftables_sets():
                 )
 
 
-def arp_timeout_updater(mac_address):
-    if check_which_user_logged_in_for_mac_address(mac_address):
+def ip_timeout_updater(ip_addr, mac_addr):
+    if ip_addr is None:
+        return None
+
+    if check_which_user_logged_in_for_ip_address(ip_addr):
 
         tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
         now = dt.datetime.now(tz).timestamp()
 
-        row = sqlm.select_arp_row(mac_address)
-
-        log.debug(
-            f"arp_timeout_enforcer: table information for user at {mac_address}: {row}"
-        )
+        row = sqlm.select_ip_row(ip_addr)
 
         if row:
 
-            time_left_before_timeout = sqlm.ARP_TIMEOUT
-
-            sqlm.update_mac_arp_db(
-                mac_address, now, time_left_before_timeout=time_left_before_timeout
+            log.debug(
+                f"ip_timeout_updater: table information for user at {ip_addr}/{mac_addr}: {row}"
             )
 
-            log.debug(f"Updated timeout for user {mac_address}.")
+            sqlm.update_ip_db(ip_addr, now, time_left_before_timeout=sqlm.IP_TIMEOUT)
+
+            log.debug(f"Updated timeout for user {ip_addr}/{mac_addr}.")
         else:
-            sqlm.insert_mac_arp_db(mac_address, now)
+            sqlm.insert_ip_addr_ip_db(ip_addr, mac_addr, now)
     else:
         if sqlm.check_if_value_in_table(
-            mac_address,
-            "mac_address",
-            sqlm.ARP_TIMEOUT_TABLE_NAME,
+            ip_addr,
+            "ip_addr",
+            sqlm.IP_TIMEOUT_TABLE_NAME,
             sqlh.USAGE_TRACKING_DB_PATH,
         ):
-            sqlm.delete_arp_mac(mac_address)
+            sqlm.delete_ip_neigh(ip_addr)
 
 
-def arp_timeout_enforcer():
+def ip_timeout_enforcer():
 
     tz = dt.timezone(dt.timedelta(hours=UTC_OFFSET))
     now = dt.datetime.now(tz).timestamp()
 
-    mac_addresses = sqlm.fetch_all_macs_arp_timeouts()
+    ip_addrs = sqlm.fetch_all_ip_addr_ip_timeouts()
 
-    for mac_address in mac_addresses:
-        row = sqlm.select_arp_row(mac_address)
+    log.debug(f"ip_timeout_enforcer: IP addrs in db: {ip_addrs}")
+
+    for ip_addr in ip_addrs:
+        row = sqlm.select_ip_row(ip_addr)
 
         last_timestamp = row[3]
-        time_left_before_timeout = row[4]
+        time_left_before_timeout = row[5]
 
         if time_left_before_timeout <= 0:
-            success = arp_enforce_timeout(mac_address)
+            log.debug(f"ip_timeout_enforcer: Enforcing timeout for user at {ip_addr}")
+            success = ip_enforce_timeout(ip_addr)
 
             # May need to add some else logic here in future if enforcement gets more complicated.
             if success:
-                sqlm.delete_arp_mac(mac_address)
+                sqlm.delete_ip_neigh(ip_addr)
+                log.debug(
+                    f"ip_timeout_enforcer: Deleting user at {ip_addr} from ip_timeouts table"
+                )
         else:
             new_time_left_before_timeout = int(
                 time_left_before_timeout - (now - last_timestamp)
             )
-            sqlm.update_mac_arp_db(
-                mac_address, now, time_left_before_timeout=new_time_left_before_timeout
+            sqlm.update_ip_db(
+                ip_addr, now, time_left_before_timeout=new_time_left_before_timeout
             )
+            log.debug(f"ip_timeout_enforcer: Updated ip timeouts for user at {ip_addr}")
 
 
-def arp_enforce_timeout(mac_address):
+def ip_enforce_timeout(ip_addr, mac_addr):
     # Log user out
-    log_out_user(mac_address)
+    log_out_user(mac_addr)
+    log.debug("ip_enforce_timeout: Placeholder for user logout...")
 
     # In future, maybe add to short DHCP lease pool.
 
-    log.info(f"Timeout enforced for user at {mac_address}")
+    log.info(f"Timeout enforced for user at {ip_addr}/{mac_addr}")
