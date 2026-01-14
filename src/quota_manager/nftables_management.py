@@ -2,25 +2,21 @@ import nftables
 import json
 import logging
 
+from quota_manager import sqlite_helper_functions as sqlh
+
 # Need to figure out what default will be here. Use captive table, or modify fw4 table?
 TABLE_FAMILY = "inet"
-CAPTIVE_TABLE_NAME = "fw4"
-THROTTLE_TABLE_NAME = "fw4"
+TABLE_NAME = "fw4"
 AUTH_SET_NAME = "authorized_users"
 THROTTLE_SET_NAME = "throttled_users"
 HIGH_SPEED_SET_NAME = "high_speed_users"
+DROP_SET_NAME = "dropped_users"
 
 log = logging.getLogger(__name__)
 
 
 class NFTSetMissingElementError(Exception):
     """Raised when an nftables set is missing an element it really should have."""
-
-    pass
-
-
-class MACAddressError(Exception):
-    """Raised when a user does not exist."""
 
     pass
 
@@ -50,19 +46,17 @@ def operation_on_set_element(operation, table_family, table_name, set_name, elem
     rc, output, error = nft.json_cmd(cmd_dict)
 
 
-def get_bytes_from_user(user_mac):
+def get_bytes_from_user(user_ip):
     nft = nftables.Nftables()
     nft.set_json_output(True)
-    rc, output, error = nft.cmd(
-        f"list set {TABLE_FAMILY} {CAPTIVE_TABLE_NAME} {AUTH_SET_NAME}"
-    )
+    rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
     sets = json.loads(output)["nftables"]
 
     elements = sets[1]["set"]
 
     if not "elem" in sets[1]["set"]:
         log.error(
-            f"ERROR: Operation to fetch usage failed for user {user_mac}: set empty."
+            f"ERROR: Operation to fetch usage failed for user {user_ip}: set empty."
         )
         raise NFTSetMissingElementError(f"Authorized users set empty.")
 
@@ -71,14 +65,14 @@ def get_bytes_from_user(user_mac):
     user_bytes = [
         elem["elem"]["counter"]["bytes"]
         for elem in elements
-        if elem["elem"]["val"] == user_mac
+        if elem["elem"]["val"] == user_ip
     ]
 
     if len(user_bytes) < 1:
         log.error(
-            f"ERROR: Operation to fetch usage failed for user {user_mac}: MAC address not in set."
+            f"ERROR: Operation to fetch usage failed for user {user_ip}: IP address not in set."
         )
-        raise MACAddressError(f"Usage bytes undefined for user {user_mac}")
+        raise sqlh.IPAddressError(f"Usage bytes undefined for user {user_ip}")
 
     return user_bytes[0]
 
@@ -86,9 +80,7 @@ def get_bytes_from_user(user_mac):
 def get_bytes_from_all_users():
     nft = nftables.Nftables()
     nft.set_json_output(True)
-    rc, output, error = nft.cmd(
-        f"list set {TABLE_FAMILY} {CAPTIVE_TABLE_NAME} {AUTH_SET_NAME}"
-    )
+    rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
     sets = json.loads(output)["nftables"]
     elements = sets[1]["set"]["elem"]
     counter_dict = {
