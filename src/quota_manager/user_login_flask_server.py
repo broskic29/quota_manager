@@ -64,7 +64,7 @@ def login():
 
         if rad_auth:
 
-            old_username_for_mac_addresse, _ = flu.safe_call(
+            old_username_for_mac_address, _ = flu.safe_call(
                 qm.check_which_user_logged_in_for_mac_address,
                 error,
                 USER_LOGIN_ERROR_MESSAGES,
