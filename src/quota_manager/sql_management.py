@@ -509,7 +509,6 @@ def login_user_usage(
     username,
     ip_address,
     mac_address,
-    session_start_bytes,
     db_path=sqlh.USAGE_TRACKING_DB_PATH,
 ):
     row = select_user_row(username)
@@ -528,7 +527,6 @@ def login_user_usage(
         log.debug(f"Values for user {username}: {values}")
         values[2] = ip_address
         values[3] = mac_address
-        values[8] = session_start_bytes
         values[9] = LOGGED_IN
 
         con = sqlite3.connect(
