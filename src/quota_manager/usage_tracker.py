@@ -10,7 +10,7 @@ import quota_manager.quota_management as qm
 from quota_manager.sqlite_helper_functions import UTC_OFFSET
 
 ACCOUNT_BILLING_DAY = 7
-UPDATE_INTERVAL = 10
+UPDATE_INTERVAL = 1
 ONE_DAY = 1
 ONE_MONTH = 1
 
