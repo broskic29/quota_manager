@@ -17,6 +17,9 @@ RADIUS_TABLE_NAME = "radcheck"
 LOGGED_OUT = 0
 LOGGED_IN = 1
 
+NOT_OVER_QUOTA = 0
+OVER_QUOTA = 1
+
 IP_POLLING = 30
 IP_TIMEOUT = int(3 * IP_POLLING)
 
@@ -98,6 +101,7 @@ def init_usage_db():
             all_time_bytes INTEGER NOT NULL DEFAULT 0,
             session_start_bytes NOT NULL DEFAULT 0,
             logged_in INTEGER NOT NULL DEFAULT 0,
+            exceeds_quota INTEGER NOT NULL DEFAULT 0,
             UNIQUE(username)
         );
         """
@@ -156,7 +160,6 @@ def init_usage_db():
             mac_addr TEXT NOT NULL,
             last_timestamp INTEGER,
             timeout INTEGER DEFAULT 0,
-            time_left_before_timeout INTEGER DEFAULT {IP_TIMEOUT},
             UNIQUE(ip_addr)
         );
         """
@@ -231,6 +234,29 @@ def modify_username_radius(
     con.close()
 
 
+def get_user_password_radius(
+    username,
+    db_path=sqlh.RADIUS_DB_PATH,
+):
+    con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    cursor = con.cursor()
+
+    query = f"""
+        SELECT value
+        FROM radcheck
+        WHERE username = ? AND attribute = ?;
+    """
+
+    cursor.execute(query, (username, "Cleartext-Password"))
+
+    res = cursor.fetchone()
+
+    con.commit()
+    con.close()
+
+    return res[0]
+
+
 def modify_user_password_radius(
     username,
     password,
@@ -284,10 +310,20 @@ def insert_user_usage(
     cur = con.cursor()
     cur.execute(
         """
-    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, session_start_bytes, logged_in)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (username, mac_address, ip_address, daily_usage_bytes, monthly_usage_bytes, session_total_bytes, session_start_bytes, logged_in, over_quota)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """,
-        (f"{username}", f"{mac_address}", f"{ip_address}", 0, 0, 0, 0, LOGGED_OUT),
+        (
+            f"{username}",
+            f"{mac_address}",
+            f"{ip_address}",
+            0,
+            0,
+            0,
+            0,
+            LOGGED_OUT,
+            NOT_OVER_QUOTA,
+        ),
     )
 
     con.commit()
@@ -523,20 +559,8 @@ def login_user_usage(
 
 
 def logout_user_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
-    row = select_user_row(username)
 
-    # This updates the user if it already exists,
-    # otherwise, creates new user.
-
-    # Carries over daily bytes and whatnot. Need to test...
-    if row:
-        columns = [
-            column
-            for column in sqlh.fetch_all_columns(USAGE_TRACKING_TABLE_NAME, db_path)
-        ]
-        set_clause = ", ".join(f"{col} = ?" for col in columns)
-        values = list(row)
-        values[9] = LOGGED_OUT
+    if check_if_user_exists(username):
 
         con = sqlite3.connect(
             db_path, timeout=30, isolation_level=None
@@ -546,10 +570,10 @@ def logout_user_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
         cur.execute(
             f"""
             UPDATE users
-            SET {set_clause}
+            SET logged_in = ?
             WHERE username = ?
             """,
-            values + [username],
+            (LOGGED_OUT, username),
         )
 
         log.info(f"User {username} successfully logged out.")
@@ -672,7 +696,6 @@ def get_usernames_from_ip_address_usage(
     )
     res = cur.fetchall()
     if len(res) < 1:
-        log.debug(f"No usernames can be found for IP address: {ip_address}")
         return None
     return [entry[0] for entry in res]
 
@@ -1055,19 +1078,6 @@ def fetch_session_start_bytes(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
         con.close()
 
 
-def check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
-    username, db_path=sqlh.USAGE_TRACKING_DB_PATH
-):
-    quota_bytes = fetch_high_speed_quota_for_user_usage(username, db_path)
-
-    usage_bytes = fetch_daily_bytes_usage(username, db_path)
-
-    if usage_bytes >= quota_bytes:
-        return True
-    else:
-        return False
-
-
 def check_if_user_in_any_group(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -1173,6 +1183,28 @@ def check_if_user_logged_in(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return bool(logged_in)
 
 
+def check_if_user_exceeds_quota(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    con = sqlite3.connect(
+        db_path, timeout=30, isolation_level=None
+    )  # Connects to database
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT exceeds_quota
+        FROM users
+        WHERE username = ?
+        """,
+        (username,),
+    )
+    res = cur.fetchone()
+    con.close()
+    if res is None:
+        raise UserNameError(f"User {username} does not exist.")
+
+    exceeds_quota = res[0]
+    return bool(exceeds_quota)
+
+
 def insert_ip_addr_ip_db(user_ip, user_mac, now, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
@@ -1213,9 +1245,7 @@ def select_ip_row(ip_addr, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     return row
 
 
-def update_ip_db(
-    ip_addr, now, time_left_before_timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH
-):
+def update_ip_db(ip_addr, now, timeout, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     row = select_ip_row(ip_addr)
 
     if row:
@@ -1223,7 +1253,7 @@ def update_ip_db(
         set_clause = ", ".join(f"{col} = ?" for col in columns)
         values = list(row)
         values[3] = now
-        values[5] = time_left_before_timeout
+        values[4] = timeout
 
         con = sqlite3.connect(
             db_path, timeout=30, isolation_level=None
@@ -1255,3 +1285,37 @@ def delete_ip_neigh(ip_addr, db_path=sqlh.USAGE_TRACKING_DB_PATH):
     con.commit()
     con.close()
     log.debug(f"Deleted {ip_addr} from ip_timeouts table.")
+
+
+def update_user_quota_information(
+    username, exceeds_quota, db_path=sqlh.USAGE_TRACKING_DB_PATH
+):
+    if check_if_user_exists(username):
+
+        quota_bool = OVER_QUOTA if exceeds_quota else NOT_OVER_QUOTA
+
+        con = sqlite3.connect(
+            db_path, timeout=30, isolation_level=None
+        )  # Connects to database
+        cur = con.cursor()
+
+        cur.execute(
+            f"""
+            UPDATE users
+            SET exceeds_quota = ?
+            WHERE username = ?
+            """,
+            (quota_bool, username),
+        )
+
+        if exceeds_quota:
+            log.info(f"User {username} quota information updated: user exceeds quota.")
+        else:
+            log.info(f"User {username} quota information updated: user under quota.")
+
+        con.commit()
+        con.close()
+    else:
+        raise UserNameError(
+            f"Failed attempting to log out user {username}: User does not exist."
+        )

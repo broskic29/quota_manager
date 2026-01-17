@@ -6,7 +6,8 @@ from pyrad.packet import AccessRequest, AccessAccept
 from functools import wraps
 from flask import Response
 from werkzeug.security import check_password_hash, generate_password_hash
-from socket import timeout
+
+from math import log as mathlog, floor
 
 from quota_manager import sqlite_helper_functions as sqlh
 from quota_manager import sql_management as sqlm
@@ -32,6 +33,10 @@ UNEXPECTED_ERROR_MSG = "Unexpected error occurred."
 ADMIN_PASSWORD_HASH = generate_password_hash("donbosco1815")
 
 NAME_RE = re.compile(r"^[a-zA-Z0-9_.\-@+]{3,32}$")
+
+BYTE_BASE = 1024
+
+byte_unit_multipliers = {"MB": 1024**2, "GB": 1024**3}
 
 
 class UndefinedException(Exception):
@@ -153,3 +158,12 @@ def safe_call(fn, error, msgs, *args, **kwargs):
         log.exception(msgs["UndefinedException"])
         return None, error_appender(error, msgs["UndefinedException"])
     return vals, error
+
+
+def byte_conversion(usage_bytes):
+
+    multiplier = 0 if usage_bytes <= 0 else floor(mathlog(usage_bytes, BYTE_BASE))
+
+    byte_unit = "MB" if multiplier < 3 else "GB"
+
+    return usage_bytes / byte_unit_multipliers[byte_unit], byte_unit

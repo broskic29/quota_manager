@@ -588,16 +588,16 @@ def create_group():
         # There need to be default values selected that are simple. Then also give access to a design
         # tool to fine tune quotas.
 
-        unit_multipliers = {"MB": 1024**2, "GB": 1024**3}
+        byte_unit_multipliers = flu.byte_unit_multipliers
 
         high_speed_quota = float(data.get("high_speed_quota"))
         throttled_quota = float(data.get("throttled_quota"))
 
         high_speed_quota_bytes = int(
-            high_speed_quota * unit_multipliers[data.get("high_speed_unit")]
+            high_speed_quota * byte_unit_multipliers[data.get("high_speed_unit")]
         )
         throttled_quota_bytes = int(
-            throttled_quota * unit_multipliers[data.get("throttled_unit")]
+            throttled_quota * byte_unit_multipliers[data.get("throttled_unit")]
         )
 
         error = flu.error_appender(
