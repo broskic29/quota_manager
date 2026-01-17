@@ -1,14 +1,17 @@
 import logging
+import time
+
 from python_arptable import get_arp_table
-from pathlib import Path
-import datetime as dt
+from pyroute2 import IPRoute
+from pyroute2.netlink.rtnl.ndmsg import NUD_REACHABLE
 
 from quota_manager import sql_management as sqlm
 from quota_manager import nftables_management as nftm
 from quota_manager import sqlite_helper_functions as sqlh
 
-
 log = logging.getLogger(__name__)
+
+ip = IPRoute()
 
 
 def mac_from_ip(ip):
@@ -444,7 +447,7 @@ def delete_user_from_set(username, set_name):
         log.debug(f"Deleted user {username} from set {set_name}.")
 
 
-def authorize_user(username):
+def nft_authorize_user(username):
 
     if sqlm.check_if_user_exists(username):
 
@@ -481,7 +484,6 @@ def log_in_user(username, user_ip, user_mac):
 
     if sqlm.check_if_user_exists(username):
         try:
-
             old_usernames_for_ip_address = check_which_users_logged_in_for_ip_address(
                 user_ip
             )
@@ -493,15 +495,22 @@ def log_in_user(username, user_ip, user_mac):
                     if old_username and (old_username != username):
                         log_out_user(old_username)
 
+            # Place the user in the set they belong in (high-speed, throttled, dropped)
             initialize_user_state_nftables(username)
 
-            authorize_user(username)
+            # Place user in authorized_users set.
+            nft_authorize_user(username)
 
             session_start_bytes = initialize_session_start_bytes(user_ip)
 
+            # Update users database
             sqlm.login_user_usage(username, user_mac, user_ip, session_start_bytes)
 
             sqlm.wipe_session_total_bytes(username)
+
+            # Initialize ip timeouts
+            now = time.monotonic()
+            ip_timeout_updater(user_ip, user_mac, now, first_pass=True)
 
         except Exception as e:
             log.error(f"Error logging in user: {username}: {e}")
@@ -595,7 +604,26 @@ def check_which_users_logged_in_for_ip_address(ip_addr):
     return None
 
 
-def ip_timeout_updater(ip_addr, mac_addr, now):
+# ----- Beginning IP Neigh Utility Functions ----- #
+
+
+def poll_ip_neigh():
+    now = time.monotonic()
+    neighbors = ip.get_neighbours()
+
+    for n in neighbors:
+        try:
+            if n["state"] & NUD_REACHABLE:
+                ip_addr = dict(n.get("attrs")).get("NDA_DST")
+                mac_addr = dict(n.get("attrs")).get("NDA_LLADDR")
+                return ip_addr, mac_addr, now
+        except Exception as e:
+            log.error(f"Unexpected error updating ip timeout database for {n}: {e}.")
+
+    return None, None, None
+
+
+def ip_timeout_updater(ip_addr, mac_addr, now, first_pass=False):
     if ip_addr is None:
         return None
 
@@ -611,7 +639,9 @@ def ip_timeout_updater(ip_addr, mac_addr, now):
 
             last_timestamp = row[3]
 
-            timeout = 1 if now - last_timestamp > sqlm.IP_TIMEOUT else 0
+            ip_timeout = sqlm.IP_TIMEOUT * 3 if first_pass else sqlm.IP_TIMEOUT
+
+            timeout = 1 if now - last_timestamp > ip_timeout else 0
 
             sqlm.update_ip_db(ip_addr, now, timeout)
 
@@ -628,7 +658,7 @@ def ip_timeout_updater(ip_addr, mac_addr, now):
             sqlm.delete_ip_neigh(ip_addr)
 
 
-def ip_timeout_enforcer(now):
+def ip_timeout_enforcer():
 
     ip_and_mac_addrs = sqlm.fetch_all_ip_addr_ip_timeouts()
 
