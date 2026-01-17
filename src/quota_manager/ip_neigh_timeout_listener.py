@@ -21,15 +21,11 @@ def ip_neigh_poll_and_update(stop_event):
         neighbors = ip.get_neighbours()
 
         for n in neighbors:
-            try:
-                if n["state"] & NUD_REACHABLE:
-                    ip_addr = dict(n.get("attrs")).get("NDA_DST")
-                    mac_addr = dict(n.get("attrs")).get("NDA_LLADDR")
-                    ip_timeout_updater(ip_addr, mac_addr, now)
-            except Exception as e:
-                log.error(
-                    f"Unexpected error updating ip timeout database for {n}: {e}."
-                )
+
+            if n["state"] & NUD_REACHABLE:
+                ip_addr = dict(n.get("attrs")).get("NDA_DST")
+                mac_addr = dict(n.get("attrs")).get("NDA_LLADDR")
+                ip_timeout_updater(ip_addr, mac_addr, now)
 
         stop_event.wait(IP_POLLING)
 

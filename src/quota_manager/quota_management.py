@@ -25,6 +25,16 @@ def mac_from_ip(ip):
     return mac_address
 
 
+def fetch_user_ip(username):
+    try:
+        user_ip = sqlm.fetch_user_ip_address_usage(username)
+    except sqlm.UserNameError:
+        log.debug(f"User {username} does not exist.")
+        user_ip = None
+
+    return user_ip
+
+
 def is_user_authenticated(username, user_ip):
     in_group = sqlm.check_if_user_in_any_group(
         username, db_path=sqlh.USAGE_TRACKING_DB_PATH
@@ -235,51 +245,70 @@ def reset_throttling_and_packet_dropping_all_users(db_path=sqlh.USAGE_TRACKING_D
             nftm.undrop_ip(user_ip)
 
 
-def remove_user_from_nftables(username):
+def remove_user_from_nftables(username=None, user_ip=None):
 
-    if sqlm.check_if_user_exists(username):
-
-        try:
-            user_ip = sqlm.fetch_user_ip_address_usage(username)
-        except sqlh.IPAddressError:
-            log.debug(f"No IP address for user {username}.")
-            return None
-
-        if user_ip is not None:
-            nftm.operation_on_set_element(
-                "delete",
-                nftm.TABLE_FAMILY,
-                nftm.TABLE_NAME,
-                nftm.AUTH_SET_NAME,
-                user_ip,
+    if user_ip is None:
+        if username is None:
+            raise sqlh.IPAddressError(
+                f"Failure attempting to remove user from IP timeout database. IP Address not given and not associated with any user."
             )
+        else:
+            if sqlm.check_if_user_exists(username):
+                user_ip = fetch_user_ip(username)
+            else:
+                log.info(f"User {username} doesn't exist.")
 
-            nftm.operation_on_set_element(
-                "delete",
-                nftm.TABLE_FAMILY,
-                nftm.TABLE_NAME,
-                nftm.DROP_SET_NAME,
-                user_ip,
-            )
+    if user_ip is not None:
+        nftm.operation_on_set_element(
+            "delete",
+            nftm.TABLE_FAMILY,
+            nftm.TABLE_NAME,
+            nftm.AUTH_SET_NAME,
+            user_ip,
+        )
 
-            nftm.operation_on_set_element(
-                "delete",
-                nftm.TABLE_FAMILY,
-                nftm.TABLE_NAME,
-                nftm.THROTTLE_SET_NAME,
-                user_ip,
-            )
+        nftm.operation_on_set_element(
+            "delete",
+            nftm.TABLE_FAMILY,
+            nftm.TABLE_NAME,
+            nftm.DROP_SET_NAME,
+            user_ip,
+        )
 
-            nftm.operation_on_set_element(
-                "delete",
-                nftm.TABLE_FAMILY,
-                nftm.TABLE_NAME,
-                nftm.HIGH_SPEED_SET_NAME,
-                user_ip,
-            )
+        nftm.operation_on_set_element(
+            "delete",
+            nftm.TABLE_FAMILY,
+            nftm.TABLE_NAME,
+            nftm.THROTTLE_SET_NAME,
+            user_ip,
+        )
+
+        nftm.operation_on_set_element(
+            "delete",
+            nftm.TABLE_FAMILY,
+            nftm.TABLE_NAME,
+            nftm.HIGH_SPEED_SET_NAME,
+            user_ip,
+        )
 
     else:
         log.info(f"User {username} doesn't exist.")
+
+
+def remove_user_from_ip_timeouts(username=None, ip_addr=None):
+
+    if ip_addr is None:
+        if username:
+            ip_addr = fetch_user_ip(username)
+            sqlm.delete_ip_neigh(ip_addr)
+        else:
+            raise sqlh.IPAddressError(
+                f"Failure attempting to remove user from IP timeout database. IP Address not given and not associated with any user."
+            )
+
+    sqlm.delete_ip_neigh(ip_addr)
+
+    log.debug(f"Removed user {username} at {ip_addr} from timeouts table.")
 
 
 def get_quota_and_daily_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
@@ -360,11 +389,7 @@ def enforce_quota_single_user(
 
         user_exceeds_quota = sqlm.check_if_user_exceeds_quota(username, db_path)
 
-        try:
-            user_ip = sqlm.fetch_user_ip_address_usage(username)
-        except sqlm.UserNameError:
-            log.debug(f"User {username} does not exist.")
-            user_ip = None
+        user_ip = fetch_user_ip(username)
 
         user_throttled = nftm.check_if_user_throttled(user_ip)
         user_dropped = nftm.check_if_user_dropped(user_ip)
@@ -407,11 +432,7 @@ def enforce_quotas_all_users(throttling: bool, db_path=sqlh.USAGE_TRACKING_DB_PA
 def add_user_to_set(username, set_name, user_ip=None):
 
     if user_ip is None:
-        try:
-            user_ip = sqlm.fetch_user_ip_address_usage(username)
-        except sqlm.UserNameError:
-            log.debug(f"User {username} does not exist.")
-            user_ip = None
+        user_ip = fetch_user_ip(username)
 
     if user_ip:
         nftm.operation_on_set_element(
@@ -427,11 +448,7 @@ def add_user_to_set(username, set_name, user_ip=None):
 
 
 def delete_user_from_set(username, set_name):
-    try:
-        user_ip = sqlm.fetch_user_ip_address_usage(username)
-    except sqlm.UserNameError:
-        log.debug(f"User {username} does not exist.")
-        user_ip = None
+    user_ip = fetch_user_ip(username)
 
     if user_ip is not None:
         nftm.operation_on_set_element(
@@ -480,27 +497,53 @@ def unauthorize_user(username):
 def log_in_user(username, user_ip, user_mac):
 
     if sqlm.check_if_user_exists(username):
-        try:
 
-            old_usernames_for_ip_address = check_which_users_logged_in_for_ip_address(
-                user_ip
-            )
-            if old_usernames_for_ip_address:
+        # Make sure that switching devices for a logged in user is handled
+        # properly...
+        if sqlm.check_if_user_logged_in(username):
+            old_user_ip = fetch_user_ip(username)
+            if old_user_ip != user_ip:
                 log.debug(
-                    f"Multiple users detected for IP {user_ip}: {old_usernames_for_ip_address}. Logging out users..."
+                    f"New device detected for {username}. Clearing old IP address from system..."
                 )
-                for old_username in old_usernames_for_ip_address:
-                    if old_username and (old_username != username):
-                        log_out_user(old_username)
+                remove_user_from_nftables(username)
 
-            initialize_user_state_nftables(username)
+        # Clean up old IP addresses associated with a user
+        try:
+            users_logged_in_for_ip_addr, users_logged_out_for_ip_addr = (
+                check_which_users_logged_in_for_ip_address(user_ip)
+            )
 
+            if users_logged_in_for_ip_addr:
+                log.debug(
+                    f"Multiple users detected for IP {user_ip}: logged in:{users_logged_in_for_ip_addr}, logged_out: {users_logged_out_for_ip_addr}. Logging out users..."
+                )
+                for username in users_logged_in_for_ip_addr:
+                    log_out_user(username)
+
+            if users_logged_out_for_ip_addr:
+                log.debug(
+                    f"Multiple users detected for IP {user_ip}: logged in:{users_logged_in_for_ip_addr}, logged_out: {users_logged_out_for_ip_addr}. Wiping user from nft..."
+                )
+                for username in users_logged_out_for_ip_addr:
+                    remove_user_from_nftables(username)
+
+            # Update ip, mac, logged_in status
+            sqlm.login_user_usage(username, user_mac, user_ip)
+
+            # Add user to authorized users set
             authorize_user(username)
 
+            # Put user ip in correct nft set
+            initialize_user_state_nftables(username)
+
+            # Fetch start bytes from nft set
             session_start_bytes = initialize_session_start_bytes(user_ip)
 
-            sqlm.login_user_usage(username, user_mac, user_ip, session_start_bytes)
+            # Update db with start bytes
+            sqlm.update_session_start_bytes(username, session_start_bytes)
 
+            # Reset db session_total_bytes
             sqlm.wipe_session_total_bytes(username)
 
         except Exception as e:
@@ -521,6 +564,8 @@ def log_out_user(username):
     if sqlm.check_if_user_logged_in(username):
         try:
             remove_user_from_nftables(username)
+
+            remove_user_from_ip_timeouts(username)
 
             sqlm.wipe_session_total_bytes(username)
 
@@ -580,6 +625,7 @@ def check_which_users_logged_in_for_ip_address(ip_addr):
     usernames = sqlm.get_usernames_from_ip_address_usage(ip_addr)
 
     logged_in_users = []
+    logged_out_users = []
     if usernames is not None:
         for username in usernames:
             logged_in = sqlm.check_if_user_logged_in(username)
@@ -589,17 +635,19 @@ def check_which_users_logged_in_for_ip_address(ip_addr):
                     f"check_which_users_logged_in_for_ip_address: User {username} logged in at IP address {ip_addr}"
                 )
                 logged_in_users.append(username)
+            else:
+                logged_out_users.append(username)
 
-    if logged_in_users:
-        return logged_in_users
-    return None
+    return logged_in_users, logged_out_users
 
 
 def ip_timeout_updater(ip_addr, mac_addr, now):
     if ip_addr is None:
         return None
 
-    if check_which_users_logged_in_for_ip_address(ip_addr):
+    users_logged_in_for_ip_addr, _ = check_which_users_logged_in_for_ip_address(ip_addr)
+
+    if users_logged_in_for_ip_addr:
 
         row = sqlm.select_ip_row(ip_addr)
 
@@ -625,7 +673,7 @@ def ip_timeout_updater(ip_addr, mac_addr, now):
             sqlm.IP_TIMEOUT_TABLE_NAME,
             sqlh.USAGE_TRACKING_DB_PATH,
         ):
-            sqlm.delete_ip_neigh(ip_addr)
+            remove_user_from_ip_timeouts(None, ip_addr)
 
 
 def ip_timeout_enforcer(now):
@@ -652,7 +700,7 @@ def ip_timeout_enforcer(now):
                 log.debug(
                     f"ip_timeout_enforcer: Enforced timeout for user at {ip_addr}"
                 )
-                sqlm.delete_ip_neigh(ip_addr)
+                remove_user_from_ip_timeouts(None, ip_addr)
                 log.debug(
                     f"ip_timeout_enforcer: Deleting user at {ip_addr} from ip_timeouts table"
                 )
