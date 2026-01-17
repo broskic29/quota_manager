@@ -1,5 +1,4 @@
 import logging
-import pickle
 from python_arptable import get_arp_table
 from pathlib import Path
 import datetime as dt
@@ -21,7 +20,7 @@ def mac_from_ip(ip):
 
     if mac_address is None:
         log.error(f"No MAC address found associated with ip {ip}.")
-        raise KeyError(f"No MAC address found associated with ip {ip}.")
+        raise sqlh.MACAddressError(f"No MAC address found associated with ip {ip}.")
 
     return mac_address
 
@@ -52,7 +51,7 @@ def fetch_user_bytes(username):
     try:
         user_bytes = nftm.get_bytes_from_user(user_ip)
     except nftm.NFTSetMissingElementError:
-        log.debug(f"Authorized users set empty.")
+        log.debug(f"High speed users set empty.")
         return None
 
     log.debug(f"User bytes: {user_bytes}")
@@ -62,13 +61,39 @@ def fetch_user_bytes(username):
 
 def initialize_session_start_bytes(ip_addr):
     log.debug(f"Initializing session start bytes for user at {ip_addr}")
-    try:
-        session_start_bytes = nftm.get_bytes_from_user(ip_addr)
-    except (nftm.NFTSetMissingElementError, sqlh.IPAddressError):
-        log.debug(f"IP address {ip_addr} not in set.")
+    if not nftm.check_if_user_dropped(ip_addr) or nftm.check_if_user_throttled(ip_addr):
+        try:
+            session_start_bytes = nftm.get_bytes_from_user(ip_addr)
+        except (nftm.NFTSetMissingElementError, sqlh.IPAddressError):
+            log.debug(f"IP address {ip_addr} not in set.")
+            session_start_bytes = 0
+        log.debug(f"Session start bytes: {session_start_bytes}")
+        return session_start_bytes
+    else:
         return 0
-    log.debug(f"Session start bytes: {session_start_bytes}")
-    return session_start_bytes
+
+
+def initialize_user_state_nftables(username, throttling=False):
+
+    exceeds_quota, _, _ = evaluate_user_bytes_against_quota(username)
+
+    # All of these nftables functions are atomic, no worries
+    if exceeds_quota:
+        if throttling:
+            log.debug(
+                f"Recently logged in user {username} exceeds quota. Throttling..."
+            )
+            throttle_single_user(username)
+        else:
+            log.debug(
+                f"Recently logged in user {username} exceeds quota. Dropping packets..."
+            )
+            drop_single_user(username)
+    else:
+        log.debug(
+            f"Recently logged in user {username} under quota. Adding to high-speed users..."
+        )
+        make_single_user_high_speed(username)
 
 
 def calculate_byte_delta(user_bytes, username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
@@ -102,140 +127,281 @@ def update_all_users_bytes(db_path=sqlh.USAGE_TRACKING_DB_PATH):
     usernames = sqlm.fetch_all_usernames_usage(db_path)
 
     for username in usernames:
-        usage_dict = update_user_bytes(username, usage_dict)
+        if not sqlm.check_if_user_exceeds_quota(username):
+            usage_dict = update_user_bytes(username, usage_dict)
 
     return usage_dict
 
 
-def reset_throttling_and_packet_dropping(
-    username=None, db_path=sqlh.USAGE_TRACKING_DB_PATH
-):
+def throttle_single_user(username, user_ip=None):
 
-    if username is None:
-        nftm.flush_set(nftm.TABLE_FAMILY, nftm.TABLE_NAME, nftm.THROTTLE_SET_NAME)
-        nftm.flush_set(nftm.TABLE_FAMILY, nftm.TABLE_NAME, nftm.DROP_SET_NAME)
+    if user_ip is None:
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlm.UserNameError:
+            log.debug(
+                f"Failed to reset throttling for user {username}. User does not exist."
+            )
+            user_ip = None
 
-        usernames = sqlm.fetch_all_usernames_usage(db_path)
-    else:
-        usernames = [username]
+    if user_ip:
+        nftm.throttle_ip(user_ip)
+        log.debug(f"User {username} throttled.")
+
+
+def drop_single_user(username, user_ip=None):
+
+    if user_ip is None:
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlm.UserNameError:
+            log.debug(
+                f"Failed to reset throttling for user {username}. User does not exist."
+            )
+            user_ip = None
+
+    if user_ip:
+        nftm.drop_ip(user_ip)
+        log.debug(f"Packets from user {username} dropped.")
+
+
+def make_single_user_high_speed(username, user_ip=None):
+
+    if user_ip is None:
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlm.UserNameError:
+            log.debug(
+                f"Failed to make user {username} high speed. User does not exist."
+            )
+            user_ip = None
+    if user_ip:
+        if not nftm.check_if_user_high_speed(user_ip):
+            add_user_to_set(username, nftm.HIGH_SPEED_SET_NAME, user_ip=user_ip)
+            log.debug(f"User {username} made high-speed.")
+
+
+def reset_throttling_single_user(username, user_ip=None):
+
+    if user_ip is None:
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlm.UserNameError:
+            log.debug(
+                f"Failed to reset throttling for user {username}. User does not exist."
+            )
+            user_ip = None
+
+    if user_ip:
+        nftm.unthrottle_ip(user_ip)
+        log.debug(f"User {username} unthrottled.")
+
+
+def reset_dropping_single_user(username, user_ip=None):
+
+    if user_ip is None:
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlm.UserNameError:
+            log.debug(
+                f"Failed to reset throttling for user {username}. User does not exist."
+            )
+            user_ip = None
+
+    if user_ip:
+        nftm.undrop_ip(user_ip)
+        log.debug(f"User {username} undropped.")
+
+
+def reset_throttling_and_packet_dropping_all_users(db_path=sqlh.USAGE_TRACKING_DB_PATH):
+
+    nftm.flush_set(nftm.TABLE_FAMILY, nftm.TABLE_NAME, nftm.THROTTLE_SET_NAME)
+    nftm.flush_set(nftm.TABLE_FAMILY, nftm.TABLE_NAME, nftm.DROP_SET_NAME)
+
+    usernames = sqlm.fetch_all_usernames_usage(db_path)
 
     for username in usernames:
 
         try:
             user_ip = sqlm.fetch_user_ip_address_usage(username)
         except sqlm.UserNameError:
+            log.debug(
+                f"Failed to reset throttling and packet_dropping for user {username}. User does not exist."
+            )
             user_ip = None
 
-        if user_ip is None:
-            log.error(
-                f"ERROR: failed to reset throttling for user {username}. User IP address not found."
-            )
-            raise sqlh.IPAddressError(f"No IP address found for user {username}")
+        if user_ip:
+            nftm.unthrottle_ip(user_ip)
+            nftm.undrop_ip(user_ip)
 
-        nftm.operation_on_set_element(
-            "add",
-            nftm.TABLE_FAMILY,
-            nftm.TABLE_NAME,
-            nftm.HIGH_SPEED_SET_NAME,
-            user_ip,
+
+def remove_user_from_nftables(username):
+
+    if sqlm.check_if_user_exists(username):
+
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlh.IPAddressError:
+            log.debug(f"No IP address for user {username}.")
+            return None
+
+        if user_ip is not None:
+            nftm.operation_on_set_element(
+                "delete",
+                nftm.TABLE_FAMILY,
+                nftm.TABLE_NAME,
+                nftm.AUTH_SET_NAME,
+                user_ip,
+            )
+
+            nftm.operation_on_set_element(
+                "delete",
+                nftm.TABLE_FAMILY,
+                nftm.TABLE_NAME,
+                nftm.DROP_SET_NAME,
+                user_ip,
+            )
+
+            nftm.operation_on_set_element(
+                "delete",
+                nftm.TABLE_FAMILY,
+                nftm.TABLE_NAME,
+                nftm.THROTTLE_SET_NAME,
+                user_ip,
+            )
+
+            nftm.operation_on_set_element(
+                "delete",
+                nftm.TABLE_FAMILY,
+                nftm.TABLE_NAME,
+                nftm.HIGH_SPEED_SET_NAME,
+                user_ip,
+            )
+
+    else:
+        log.info(f"User {username} doesn't exist.")
+
+
+def get_quota_and_daily_usage(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+
+    quota_bytes = sqlm.fetch_high_speed_quota_for_user_usage(username, db_path)
+    daily_usage_bytes = sqlm.fetch_daily_bytes_usage(username, db_path)
+
+    return daily_usage_bytes, quota_bytes
+
+
+def evaluate_quota(usage_bytes, quota_bytes):
+
+    if quota_bytes is None:
+        return False  # or False with a clear reason — but choose explicitly
+
+    if usage_bytes >= quota_bytes:
+        return True
+
+    return False
+
+
+def evaluate_user_bytes_against_quota(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+
+    try:
+        daily_usage_bytes, quota_bytes = get_quota_and_daily_usage(username, db_path)
+    except sqlm.UserNameError as e:
+        raise sqlm.UserNameError(
+            f"Operation to fetch daily usage bytes for user {username} failed: {e}"
         )
 
-        log.info(f"Reset throttling and packet dropping for user: {username}")
+    exceeds_quota = evaluate_quota(daily_usage_bytes, quota_bytes)
+
+    return exceeds_quota, daily_usage_bytes, quota_bytes
 
 
-def enforce_quotas_all_users(
-    quota_dict, throttling: bool, db_path=sqlh.USAGE_TRACKING_DB_PATH
+def update_quota_information_single_user(username, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+
+    if sqlm.check_if_user_logged_in(username):
+
+        exceeds_quota, daily_usage_bytes, quota_bytes = (
+            evaluate_user_bytes_against_quota(username, db_path)
+        )
+
+        if exceeds_quota != sqlm.check_if_user_exceeds_quota(username, db_path):
+            sqlm.update_user_quota_information(username, exceeds_quota, db_path)
+            log.debug(
+                f"Quota state has changed, updating quota information for user {username}..."
+            )
+
+        return exceeds_quota, daily_usage_bytes, quota_bytes
+    return None, None, None
+
+
+def update_quota_information_all_users(quota_dict, db_path=sqlh.USAGE_TRACKING_DB_PATH):
+    usernames = sqlm.fetch_all_usernames_usage(db_path)
+
+    for username in usernames:
+
+        if username not in quota_dict:
+            quota_dict[username] = {"exceeds_quota": False, "quota_msg": ""}
+
+        exceeds_quota, daily_usage_bytes, quota_bytes = (
+            update_quota_information_single_user(username, db_path)
+        )
+
+        if exceeds_quota and daily_usage_bytes and quota_bytes:
+            quota_dict[username]["exceeds_quota"] = exceeds_quota
+            quota_dict[username]["quota_msg"] = f"{daily_usage_bytes}/{quota_bytes}"
+
+    return quota_dict
+
+
+def enforce_quota_single_user(
+    username, throttling: bool, db_path=sqlh.USAGE_TRACKING_DB_PATH
 ):
+
+    if sqlm.check_if_user_logged_in(username):
+
+        user_exceeds_quota = sqlm.check_if_user_exceeds_quota(username, db_path)
+
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlm.UserNameError:
+            log.debug(f"User {username} does not exist.")
+            user_ip = None
+
+        user_throttled = nftm.check_if_user_throttled(user_ip)
+        user_dropped = nftm.check_if_user_dropped(user_ip)
+
+        if user_exceeds_quota:
+
+            # Add error catching here.
+
+            if throttling:
+                if not user_throttled:
+                    throttle_single_user(username, user_ip=user_ip)
+                    log.info(f"Throttling {username} to 1mbps...")
+
+            else:
+                if not user_dropped:
+                    drop_single_user(username, user_ip=user_ip)
+                    log.info(f"Dropping packets from {username}...")
+
+        else:
+
+            if user_throttled:
+                reset_throttling_single_user(username, user_ip=user_ip)
+                log.info(f"Reset throttling for user {username}.")
+            elif user_dropped:
+                reset_dropping_single_user(username, user_ip=user_ip)
+                log.info(f"Reset packet dropping for user {username}.")
+            else:
+                make_single_user_high_speed(username, user_ip=user_ip)
+
+
+def enforce_quotas_all_users(throttling: bool, db_path=sqlh.USAGE_TRACKING_DB_PATH):
 
     usernames = sqlm.fetch_all_usernames_usage(db_path)
 
     for username in usernames:
-        if sqlm.check_if_user_logged_in(username):
-            if sqlm.check_if_daily_bytes_exceeds_high_speed_quota_for_user_usage(
-                username, db_path
-            ):
-                if username not in quota_dict["over_quota"]:
-                    quota_dict["over_quota"].append(username)
 
-                    if username in quota_dict["under_quota"]:
-                        quota_dict["under_quota"].remove(username)
-
-                    try:
-                        ip_addr = sqlm.fetch_user_ip_address_usage(username)
-                    except sqlm.UserNameError:
-                        log.error(
-                            f"ERROR: failed to fetch IP addres for user {username}. User not found."
-                        )
-                        raise sqlm.UserNameError(
-                            f"No IP address found for user {username}"
-                        )
-
-                    # Add error catching here
-
-                    if throttling:
-                        nftm.operation_on_set_element(
-                            "add",
-                            nftm.TABLE_FAMILY,
-                            nftm.TABLE_NAME,
-                            nftm.THROTTLE_SET_NAME,
-                            ip_addr,
-                        )
-                        nftm.operation_on_set_element(
-                            "delete",
-                            nftm.TABLE_FAMILY,
-                            nftm.TABLE_NAME,
-                            nftm.HIGH_SPEED_SET_NAME,
-                            ip_addr,
-                        )
-                        nftm.operation_on_set_element(
-                            "delete",
-                            nftm.TABLE_FAMILY,
-                            nftm.TABLE_NAME,
-                            nftm.DROP_SET_NAME,
-                            ip_addr,
-                        )
-                        log.info(
-                            f"Daily usage exceeds quota for user: {username}. Throttling to 1mbps..."
-                        )
-                    else:
-                        nftm.operation_on_set_element(
-                            "delete",
-                            nftm.TABLE_FAMILY,
-                            nftm.TABLE_NAME,
-                            nftm.THROTTLE_SET_NAME,
-                            ip_addr,
-                        )
-                        nftm.operation_on_set_element(
-                            "delete",
-                            nftm.TABLE_FAMILY,
-                            nftm.TABLE_NAME,
-                            nftm.HIGH_SPEED_SET_NAME,
-                            ip_addr,
-                        )
-                        nftm.operation_on_set_element(
-                            "add",
-                            nftm.TABLE_FAMILY,
-                            nftm.TABLE_NAME,
-                            nftm.DROP_SET_NAME,
-                            ip_addr,
-                        )
-                        log.info(
-                            f"Daily usage exceeds quota for user: {username}. Dropping packets..."
-                        )
-            else:
-                if username not in quota_dict["under_quota"]:
-                    quota_dict["under_quota"].append(username)
-
-                    if username in quota_dict["over_quota"]:
-                        quota_dict["over_quota"].remove(username)
-
-                    log.info(
-                        f"Resetting throttling and packet dropping for: {username}..."
-                    )
-
-                    reset_throttling_and_packet_dropping(username)
-
-    return quota_dict
+        enforce_quota_single_user(username, throttling, db_path)
 
 
 def add_user_to_set(username, set_name, user_ip=None):
@@ -278,14 +444,35 @@ def delete_user_from_set(username, set_name):
         log.debug(f"Deleted user {username} from set {set_name}.")
 
 
+def authorize_user(username):
+
+    if sqlm.check_if_user_exists(username):
+
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlh.IPAddressError:
+            log.debug(f"No IP address for user {username}.")
+            return None
+
+        nftm.auth_ip(user_ip)
+        log.debug(f"Added user {username} to {nftm.AUTH_SET_NAME} set.")
+
+    else:
+        log.info(f"User {username} doesn't exist.")
+
+
 def unauthorize_user(username):
 
     if sqlm.check_if_user_exists(username):
-        delete_user_from_set(username, nftm.AUTH_SET_NAME)
-        delete_user_from_set(username, nftm.HIGH_SPEED_SET_NAME)
-        delete_user_from_set(username, nftm.THROTTLE_SET_NAME)
-        delete_user_from_set(username, nftm.DROP_SET_NAME)
-        log.info(f"Successfully unauthorized user {username}.")
+
+        try:
+            user_ip = sqlm.fetch_user_ip_address_usage(username)
+        except sqlh.IPAddressError:
+            log.debug(f"No IP address for user {username}.")
+            return None
+
+        nftm.unauth_ip(user_ip)
+
     else:
         log.info(f"User {username} doesn't exist.")
 
@@ -295,16 +482,20 @@ def log_in_user(username, user_ip, user_mac):
     if sqlm.check_if_user_exists(username):
         try:
 
-            old_username_for_ip_address = check_which_user_logged_in_for_ip_address(
+            old_usernames_for_ip_address = check_which_users_logged_in_for_ip_address(
                 user_ip
             )
+            if old_usernames_for_ip_address:
+                log.debug(
+                    f"Multiple users detected for IP {user_ip}: {old_usernames_for_ip_address}. Logging out users..."
+                )
+                for old_username in old_usernames_for_ip_address:
+                    if old_username and (old_username != username):
+                        log_out_user(old_username)
 
-            if old_username_for_ip_address and (
-                old_username_for_ip_address is not username
-            ):
-                log_out_user(old_username_for_ip_address)
+            initialize_user_state_nftables(username)
 
-            add_user_to_set(username, nftm.AUTH_SET_NAME, user_ip=user_ip)
+            authorize_user(username)
 
             session_start_bytes = initialize_session_start_bytes(user_ip)
 
@@ -327,18 +518,19 @@ def log_in_user(username, user_ip, user_mac):
 
 def log_out_user(username):
 
-    try:
-        unauthorize_user(username)
+    if sqlm.check_if_user_logged_in(username):
+        try:
+            remove_user_from_nftables(username)
 
-        sqlm.wipe_session_total_bytes(username)
+            sqlm.wipe_session_total_bytes(username)
 
-        sqlm.logout_user_usage(username)
+            sqlm.logout_user_usage(username)
 
-        log.info(f"Successfully logged out user {username}.")
+            log.info(f"Successfully logged out user {username}.")
 
-    except Exception as e:
-        log.error(f"Error logging out user {username}: {e}")
-        return False
+        except Exception as e:
+            log.error(f"Error logging out user {username}: {e}")
+            return False
 
     return True
 
@@ -363,7 +555,7 @@ def delete_user_from_system(username):
     if user_exists_radius:
         sqlm.delete_user_radius(username)
 
-    unauthorize_user(username)
+    remove_user_from_nftables(username)
 
     log.info(f"Successfully deleted user {username} from system.")
 
@@ -384,30 +576,30 @@ def check_which_user_logged_in_for_mac_address(mac_address):
     return None
 
 
-def check_which_user_logged_in_for_ip_address(ip_addr):
+def check_which_users_logged_in_for_ip_address(ip_addr):
     usernames = sqlm.get_usernames_from_ip_address_usage(ip_addr)
 
+    logged_in_users = []
     if usernames is not None:
         for username in usernames:
             logged_in = sqlm.check_if_user_logged_in(username)
 
             if logged_in:
                 log.debug(
-                    f"check_which_user_logged_in_for_ip_address: User {username} logged in at IP address {ip_addr}"
+                    f"check_which_users_logged_in_for_ip_address: User {username} logged in at IP address {ip_addr}"
                 )
-                return username
+                logged_in_users.append(username)
 
+    if logged_in_users:
+        return logged_in_users
     return None
 
 
-def ip_timeout_updater(ip_addr, mac_addr):
+def ip_timeout_updater(ip_addr, mac_addr, now):
     if ip_addr is None:
         return None
 
-    if check_which_user_logged_in_for_ip_address(ip_addr):
-
-        tz = dt.timezone(dt.timedelta(hours=sqlh.UTC_OFFSET))
-        now = dt.datetime.now(tz).timestamp()
+    if check_which_users_logged_in_for_ip_address(ip_addr):
 
         row = sqlm.select_ip_row(ip_addr)
 
@@ -417,7 +609,11 @@ def ip_timeout_updater(ip_addr, mac_addr):
                 f"ip_timeout_updater: table information for user at {ip_addr}/{mac_addr}: {row}"
             )
 
-            sqlm.update_ip_db(ip_addr, now, time_left_before_timeout=sqlm.IP_TIMEOUT)
+            last_timestamp = row[3]
+
+            timeout = 1 if now - last_timestamp > sqlm.IP_TIMEOUT else 0
+
+            sqlm.update_ip_db(ip_addr, now, timeout)
 
             log.debug(f"Updated timeout for user {ip_addr}/{mac_addr}.")
         else:
@@ -432,10 +628,7 @@ def ip_timeout_updater(ip_addr, mac_addr):
             sqlm.delete_ip_neigh(ip_addr)
 
 
-def ip_timeout_enforcer():
-
-    tz = dt.timezone(dt.timedelta(hours=sqlh.UTC_OFFSET))
-    now = dt.datetime.now(tz).timestamp()
+def ip_timeout_enforcer(now):
 
     ip_and_mac_addrs = sqlm.fetch_all_ip_addr_ip_timeouts()
 
@@ -444,32 +637,29 @@ def ip_timeout_enforcer():
     for ip_addr, mac_addr in ip_and_mac_addrs:
         row = sqlm.select_ip_row(ip_addr)
 
-        last_timestamp = row[3]
-        time_left_before_timeout = row[5]
+        timeout = row[4]
 
         log.debug(
             f"ip_timeout_enforcer: table information for user at {ip_addr}: {row}"
         )
 
-        if time_left_before_timeout <= 0:
-            log.debug(f"ip_timeout_enforcer: Enforcing timeout for user at {ip_addr}")
+        if timeout:
 
             success = ip_enforce_timeout(ip_addr, mac_addr)
 
             # May need to add some else logic here in future if enforcement gets more complicated.
             if success:
+                log.debug(
+                    f"ip_timeout_enforcer: Enforced timeout for user at {ip_addr}"
+                )
                 sqlm.delete_ip_neigh(ip_addr)
                 log.debug(
                     f"ip_timeout_enforcer: Deleting user at {ip_addr} from ip_timeouts table"
                 )
-        else:
-            new_time_left_before_timeout = int(
-                time_left_before_timeout - (now - last_timestamp)
-            )
-            sqlm.update_ip_db(
-                ip_addr, now, time_left_before_timeout=new_time_left_before_timeout
-            )
-            log.debug(f"ip_timeout_enforcer: Updated ip timeouts for user at {ip_addr}")
+            else:
+                log.error(
+                    f"ip_timeout_enforcer: ERROR: Failed to enforce timeout for user at {ip_addr}"
+                )
 
 
 def ip_enforce_timeout(ip_addr, mac_addr):

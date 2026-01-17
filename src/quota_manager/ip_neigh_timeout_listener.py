@@ -1,7 +1,7 @@
 import logging
 import threading
 from queue import Queue, Empty
-from time import sleep
+import time
 from pyroute2 import IPRoute
 
 from pyroute2.netlink.rtnl.ndmsg import NUD_REACHABLE
@@ -15,34 +15,26 @@ log = logging.getLogger(__name__)
 ip = IPRoute()
 
 
-def ip_neigh_poller(stop_event: threading.Event):
+def ip_neigh_poll_and_update(stop_event):
     while not stop_event.is_set():
+        now = time.monotonic()  # IMPORTANT
         neighbors = ip.get_neighbours()
-        for neighbor in neighbors:
-            event_queue.put(neighbor)
+
+        for n in neighbors:
+            try:
+                if n["state"] & NUD_REACHABLE:
+                    ip_addr = dict(n.get("attrs")).get("NDA_DST")
+                    mac_addr = dict(n.get("attrs")).get("NDA_LLADDR")
+                    ip_timeout_updater(ip_addr, mac_addr, now)
+            except Exception as e:
+                log.error(
+                    f"Unexpected error updating ip timeout database for {n}: {e}."
+                )
+
         stop_event.wait(IP_POLLING)
-
-
-def ip_neigh_timeout_tracking(stop_event: threading.Event):
-    while not stop_event.is_set():
-        try:
-            n = event_queue.get(timeout=1)  # timeout to check stop_event
-        except Empty:
-            continue
-
-        try:
-            # log.debug(f"Arp table entry: {entry}")
-            if n["state"] & NUD_REACHABLE:
-                ip_addr = dict(n.get("attrs")).get("NDA_DST")
-                mac_addr = dict(n.get("attrs")).get("NDA_LLADDR")
-
-                ip_timeout_updater(ip_addr, mac_addr)
-
-        except Exception as e:
-            log.error(f"Unexpected error updating ip timeout database for {n}: {e}.")
 
 
 def ip_neigh_enforcer(stop_event: threading.Event):
     while not stop_event.is_set():
         stop_event.wait(IP_TIMEOUT)
-        ip_timeout_enforcer()
+        ip_timeout_enforcer(time.monotonic())

@@ -49,16 +49,16 @@ def operation_on_set_element(operation, table_family, table_name, set_name, elem
 def get_bytes_from_user(user_ip):
     nft = nftables.Nftables()
     nft.set_json_output(True)
-    rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
+    rc, output, error = nft.cmd(
+        f"list set {TABLE_FAMILY} {TABLE_NAME} {HIGH_SPEED_SET_NAME}"
+    )
     sets = json.loads(output)["nftables"]
 
     elements = sets[1]["set"]
 
     if not "elem" in sets[1]["set"]:
-        log.error(
-            f"ERROR: Operation to fetch usage failed for user {user_ip}: set empty."
-        )
-        raise NFTSetMissingElementError(f"Authorized users set empty.")
+        log.debug(f"Operation to fetch usage failed for user {user_ip}: set empty.")
+        raise NFTSetMissingElementError(f"High speed users set empty.")
 
     elements = sets[1]["set"]["elem"]
 
@@ -80,7 +80,9 @@ def get_bytes_from_user(user_ip):
 def get_bytes_from_all_users():
     nft = nftables.Nftables()
     nft.set_json_output(True)
-    rc, output, error = nft.cmd(f"list set {TABLE_FAMILY} {TABLE_NAME} {AUTH_SET_NAME}")
+    rc, output, error = nft.cmd(
+        f"list set {TABLE_FAMILY} {TABLE_NAME} {HIGH_SPEED_SET_NAME}"
+    )
     sets = json.loads(output)["nftables"]
     elements = sets[1]["set"]["elem"]
     counter_dict = {
@@ -143,7 +145,7 @@ def check_if_elem_in_set(test_elem, table_family, table_name, set_name):
 
         return bool(res)
     except (KeyError, TypeError):
-        log.info(f"Element {test_elem} not in set {set_name}.")
+        # log.debug(f"Element {test_elem} not in set {set_name}.")
         return False
 
 
@@ -175,3 +177,195 @@ def pull_elements_from_custom_sets(table_family, table_name):
     }
 
     return elem_dict
+
+
+def check_if_user_authorized(user_ip):
+    user_authed = check_if_elem_in_set(
+        user_ip,
+        TABLE_FAMILY,
+        TABLE_NAME,
+        AUTH_SET_NAME,
+    )
+
+    return user_authed
+
+
+def check_if_user_throttled(user_ip):
+    user_throttled = check_if_elem_in_set(
+        user_ip,
+        TABLE_FAMILY,
+        TABLE_NAME,
+        THROTTLE_SET_NAME,
+    )
+
+    return user_throttled
+
+
+def check_if_user_dropped(user_ip):
+    user_dropped = check_if_elem_in_set(
+        user_ip,
+        TABLE_FAMILY,
+        TABLE_NAME,
+        DROP_SET_NAME,
+    )
+
+    return user_dropped
+
+
+def check_if_user_high_speed(user_ip):
+    user_high_speed = check_if_elem_in_set(
+        user_ip,
+        TABLE_FAMILY,
+        TABLE_NAME,
+        HIGH_SPEED_SET_NAME,
+    )
+
+    return user_high_speed
+
+
+def auth_ip(user_ip):
+
+    # Add error checking
+    if not check_if_user_authorized(user_ip):
+        operation_on_set_element(
+            "add",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            AUTH_SET_NAME,
+            user_ip,
+        )
+
+
+def unauth_ip(user_ip):
+
+    # Add error checking
+    if check_if_user_authorized(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            AUTH_SET_NAME,
+            user_ip,
+        )
+
+
+def throttle_ip(user_ip):
+
+    # Add error checking
+    if not check_if_user_throttled(user_ip):
+        operation_on_set_element(
+            "add",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            THROTTLE_SET_NAME,
+            user_ip,
+        )
+
+    if check_if_user_high_speed(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            HIGH_SPEED_SET_NAME,
+            user_ip,
+        )
+
+    if check_if_user_dropped(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            DROP_SET_NAME,
+            user_ip,
+        )
+
+
+def drop_ip(user_ip):
+
+    if check_if_user_throttled(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            THROTTLE_SET_NAME,
+            user_ip,
+        )
+
+    if check_if_user_high_speed(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            HIGH_SPEED_SET_NAME,
+            user_ip,
+        )
+
+    if not check_if_user_dropped(user_ip):
+        operation_on_set_element(
+            "add",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            DROP_SET_NAME,
+            user_ip,
+        )
+
+
+def unthrottle_ip(user_ip):
+
+    # Add error checking
+    if check_if_user_throttled(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            THROTTLE_SET_NAME,
+            user_ip,
+        )
+
+    if not check_if_user_high_speed(user_ip):
+        operation_on_set_element(
+            "add",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            HIGH_SPEED_SET_NAME,
+            user_ip,
+        )
+
+    if check_if_user_dropped(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            DROP_SET_NAME,
+            user_ip,
+        )
+
+
+def undrop_ip(user_ip):
+
+    if check_if_user_throttled(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            THROTTLE_SET_NAME,
+            user_ip,
+        )
+
+    if not check_if_user_high_speed(user_ip):
+        operation_on_set_element(
+            "add",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            HIGH_SPEED_SET_NAME,
+            user_ip,
+        )
+
+    if check_if_user_dropped(user_ip):
+        operation_on_set_element(
+            "delete",
+            TABLE_FAMILY,
+            TABLE_NAME,
+            DROP_SET_NAME,
+            user_ip,
+        )

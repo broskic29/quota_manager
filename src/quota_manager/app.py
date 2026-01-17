@@ -6,11 +6,10 @@ from time import sleep
 
 from quota_manager.usage_tracker import start_usage_tracking
 from quota_manager.sql_management import init_freeradius_db, init_usage_db
-from quota_manager.user_login_flask_server import user_login_app
+from quota_manager.user_login_flask_server import user_app
 from quota_manager.admin_management_flask_server import admin_management_app
 from quota_manager.ip_neigh_timeout_listener import (
-    ip_neigh_poller,
-    ip_neigh_timeout_tracking,
+    ip_neigh_poll_and_update,
     ip_neigh_enforcer,
 )
 
@@ -43,7 +42,7 @@ class QuotaManagerApp:
     def _start_flask_servers(self):
         log.info("Starting login page")
         login_thread = threading.Thread(
-            target=lambda: serve(user_login_app, host="0.0.0.0", port=5000),
+            target=lambda: serve(user_app, host="0.0.0.0", port=5000),
             daemon=True,
         )
 
@@ -60,10 +59,7 @@ class QuotaManagerApp:
     def _start_ip_neigh_threads(self):
         self.arp_threads = [
             threading.Thread(
-                target=ip_neigh_poller, args=(self.stop_event,), daemon=True
-            ),
-            threading.Thread(
-                target=ip_neigh_timeout_tracking, args=(self.stop_event,), daemon=True
+                target=ip_neigh_poll_and_update, args=(self.stop_event,), daemon=True
             ),
             threading.Thread(
                 target=ip_neigh_enforcer, args=(self.stop_event,), daemon=True
