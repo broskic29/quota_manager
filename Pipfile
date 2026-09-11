@@ -9,6 +9,8 @@ db-sqlite3 = "*"
 pyrad = "*"
 asyncio = "*"
 pytest = "*"
+pytest-cov = "*"
+freezegun = "*"
 python_arptable = "*"
 pip-nftables = "*"
 jsonschema = "*"
@@ -17,7 +19,6 @@ pyroute2 = "*"
 numpy = "*"
 tqdm = "*"
 quota_manager = {path = ".", editable = true}
-quota-manager = {file = ".", editable = true}
 
 [dev-packages]
 

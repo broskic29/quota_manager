@@ -22,7 +22,8 @@ class IPAddressError(Exception):
     pass
 
 
-def check_if_table_exists(table_name, db_path=RADIUS_DB_PATH):
+def check_if_table_exists(table_name, db_path=None):
+    db_path = db_path or RADIUS_DB_PATH
     con = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     cur = con.cursor()
     cur.execute(
@@ -95,7 +96,8 @@ def check_if_table_empty(table, db_path):
     return False
 
 
-def log_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
+def log_all_table_information(table, db_path=None):
+    db_path = db_path or USAGE_TRACKING_DB_PATH
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
@@ -106,7 +108,8 @@ def log_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
         log.debug(row)
 
 
-def log_all_radius_user_information(db_path=RADIUS_DB_PATH):
+def log_all_radius_user_information(db_path=None):
+    db_path = db_path or RADIUS_DB_PATH
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
@@ -117,7 +120,8 @@ def log_all_radius_user_information(db_path=RADIUS_DB_PATH):
         log.debug(row)
 
 
-def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
+def print_all_radius_user_information(db_path=None):
+    db_path = db_path or RADIUS_DB_PATH
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database
@@ -128,7 +132,8 @@ def print_all_radius_user_information(db_path=RADIUS_DB_PATH):
         print(row)
 
 
-def print_all_table_information(table, db_path=USAGE_TRACKING_DB_PATH):
+def print_all_table_information(table, db_path=None):
+    db_path = db_path or USAGE_TRACKING_DB_PATH
     con = sqlite3.connect(
         db_path, timeout=30, isolation_level=None
     )  # Connects to database

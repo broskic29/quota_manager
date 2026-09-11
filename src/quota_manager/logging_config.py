@@ -1,4 +1,5 @@
 import logging
+import sys
 
 
 class SubstringFilter(logging.Filter):
@@ -19,6 +20,15 @@ class SubstringFilter(logging.Filter):
         return True
 
 
+class MaxLevelFilter(logging.Filter):
+    def __init__(self, max_level: int):
+        super().__init__()
+        self.max_level = max_level
+
+    def filter(self, record):
+        return record.levelno < self.max_level
+
+
 def configure_logging(
     log_level: str = "INFO",
     filters=None,
@@ -31,35 +41,39 @@ def configure_logging(
     :param filters: dict, e.g., {"username": "test@gmail.com"}
     :param module_levels: dict, e.g., {"quota_manager.ip_neigh_timeout_listener": logging.DEBUG}
     """
+
     logger = logging.getLogger()
-    logger.setLevel(getattr(logging, log_level.upper()))
+    logger.handlers.clear()
+    logger.setLevel(log_level)
 
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.NOTSET)  # Important: don’t block DEBUG here
-
-    formatter = logging.Formatter(
+    fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] "
         "%(funcName)s(), %(filename)s:%(lineno)d: "
         "%(message)s"
     )
 
-    handler.setFormatter(formatter)
+    h_out = logging.StreamHandler(sys.stdout)
+    h_out.setLevel(logging.NOTSET)
+    h_out.addFilter(MaxLevelFilter(logging.ERROR))
+    h_out.setFormatter(fmt)
+
+    h_err = logging.StreamHandler(sys.stderr)
+    h_err.setLevel(logging.ERROR)
+    h_err.setFormatter(fmt)
+
+    logger.addHandler(h_out)
+    logger.addHandler(h_err)
 
     username = filters.get("username")
     mac_addr = filters.get("mac")
     ip_addr = filters.get("ip")
 
-    print()
-
-    handler.addFilter(
+    h_out.addFilter(
         SubstringFilter(username=username, mac_addr=mac_addr, ip_addr=ip_addr)
     )
 
-    # Remove any existing handlers to avoid double logging
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    logger.addHandler(handler)
+    logger.addHandler(h_out)
+    logger.addHandler(h_err)
 
     # Override per-module levels
     if module_levels:
